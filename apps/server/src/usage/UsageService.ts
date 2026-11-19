@@ -834,8 +834,13 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    let hourlyWindow: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null = null;
-    if (input.resolution === "hour") {
+    let timeBounds: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null = null;
+    let appliedBounds: { readonly sinceTime: string; readonly untilTime: string } | null = null;
+    if (
+      input.resolution === "hour" ||
+      input.sinceTime !== undefined ||
+      input.untilTime !== undefined
+    ) {
       const sinceTime =
         input.sinceTime === undefined ? Option.none() : DateTime.make(input.sinceTime);
       const untilTime =
@@ -843,19 +848,29 @@ export const make = Effect.gen(function* () {
       if (Option.isNone(sinceTime) || Option.isNone(untilTime)) {
         return yield* new UsageReadError({
           reason: "invalidWindow",
-          detail: "Hourly usage requires valid sinceTime and untilTime instants",
+          detail: "Usage time bounds require valid sinceTime and untilTime instants",
         });
       }
       const sinceTimeMs = DateTime.toEpochMillis(sinceTime.value);
       const untilTimeMs = DateTime.toEpochMillis(untilTime.value);
       const durationMs = untilTimeMs - sinceTimeMs;
-      if (durationMs <= 0 || durationMs > MAX_HOURLY_WINDOW_MS) {
+      if (durationMs <= 0) {
+        return yield* new UsageReadError({
+          reason: "invalidWindow",
+          detail: "Usage time bounds must span more than zero time",
+        });
+      }
+      if (input.resolution === "hour" && durationMs > MAX_HOURLY_WINDOW_MS) {
         return yield* new UsageReadError({
           reason: "invalidWindow",
           detail: "Hourly usage window must be greater than zero and at most 24 hours",
         });
       }
-      hourlyWindow = { sinceTimeMs, untilTimeMs };
+      timeBounds = { sinceTimeMs, untilTimeMs };
+      appliedBounds = {
+        sinceTime: DateTime.formatIso(sinceTime.value),
+        untilTime: DateTime.formatIso(untilTime.value),
+      };
     }
 
     const startedAtMs = yield* Clock.currentTimeMillis;
@@ -869,7 +884,7 @@ export const make = Effect.gen(function* () {
       });
     }
     const windowStartMs =
-      (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
+      (timeBounds?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
 
     const retentionCutoffMs =
       settings.usageHistoryRetentionDays === "unlimited"
@@ -1001,7 +1016,7 @@ export const make = Effect.gen(function* () {
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
       resolution: input.resolution ?? "day",
-      ...hourlyWindow,
+      ...timeBounds,
       rates,
       priceOverrides,
       modelAliases,
@@ -1010,7 +1025,7 @@ export const make = Effect.gen(function* () {
     });
 
     const windowEndMs =
-      hourlyWindow?.untilTimeMs ??
+      timeBounds?.untilTimeMs ??
       Date.parse(`${input.untilDay}T00:00:00Z`) + 86400000 + MTIME_SLACK_MS;
     let resolvedAny = false;
     for (const { reader } of transcriptReaders) {
@@ -1177,6 +1192,7 @@ export const make = Effect.gen(function* () {
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
+      ...appliedBounds,
       buckets: aggregated.buckets,
       sources,
       pricing: summaryPricing,

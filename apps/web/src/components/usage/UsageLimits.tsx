@@ -41,6 +41,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
 import { formatResetsIn, resetCreditChoices } from "@t3tools/shared/usageLimitsCopy";
+import type { UsageCyclePeriod } from "./usagePeriod";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
 const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
@@ -393,10 +394,12 @@ export function UsageLimitsSection({
   selectedEnvironmentIds,
   hiddenProviders,
   now,
+  onShowCycleSpend,
 }: {
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
   readonly now: number;
+  readonly onShowCycleSpend: (period: UsageCyclePeriod) => void;
 }) {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const hiddenDrivers = new Set<ServerProvider["driver"]>(
@@ -428,5 +431,7 @@ export function UsageLimitsSection({
       ];
     }),
   );
-  return <UsageLimitsPooled presentations={selected} now={now} />;
+  return (
+    <UsageLimitsPooled presentations={selected} now={now} onShowCycleSpend={onShowCycleSpend} />
+  );
 }

@@ -139,6 +139,7 @@ export const UsageSummaryInput = Schema.Struct({
   /** IANA bucketing zone; offsets fail across DST boundaries. */
   timeZone: TrimmedNonEmptyString,
   resolution: Schema.optional(UsageResolution),
+  /** Exact instant bounds; required for hourly windows, and they clip a day window's edge days. */
   sinceTime: Schema.optional(TrimmedNonEmptyString),
   untilTime: Schema.optional(TrimmedNonEmptyString),
   awaitRefresh: Schema.optional(Schema.Boolean),
@@ -154,6 +155,9 @@ export const UsageSummary = Schema.Struct({
   timeZone: TrimmedNonEmptyString,
   sinceDay: UsageDay,
   untilDay: UsageDay,
+  /** The instant bounds the server applied; absent from servers that only clip hourly windows. */
+  sinceTime: Schema.optional(TrimmedNonEmptyString),
+  untilTime: Schema.optional(TrimmedNonEmptyString),
   buckets: ForwardCompatibleArray(UsageBucket),
   sources: ForwardCompatibleArray(UsageSource),
   pricing: UsagePricing,

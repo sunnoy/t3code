@@ -96,6 +96,17 @@ import {
   type UsageMetric,
 } from "./usageShortcuts";
 import {
+  collectUsageCycles,
+  cycleResolutionKey,
+  findUsageCycle,
+  onlyProvider,
+  resolveUsagePeriod,
+  type UsageCycle,
+  type UsageCyclePeriod,
+  type UsagePeriod,
+} from "./usagePeriod";
+import { UsagePeriodPicker } from "./UsagePeriodPicker";
+import {
   PROVIDER_ORDER,
   PROVIDER_PRESENTATION,
   providersWithUsage,
@@ -111,8 +122,23 @@ function isUsageMetric(value: string | null | undefined): value is UsageMetric {
   return METRIC_OPTIONS.some((option) => option.value === value);
 }
 
-function isUsageWindowDays(value: number): value is UsagePagePreferences["windowDays"] {
-  return WINDOW_OPTIONS.some((option) => option.days === value);
+/** A cycle no selected environment reports falls back to the last week until it reappears. */
+function periodSelection(period: UsagePeriod, cycles: readonly UsageCycle[], now = new Date()) {
+  return {
+    period,
+    cycleKey: cycleResolutionKey(period, cycles),
+    window: resolveUsagePeriod(period, cycles, now) ?? makeWindow(7, now),
+  };
+}
+
+function sameWindow(left: UsageSummaryInput, right: UsageSummaryInput): boolean {
+  return (
+    left.sinceDay === right.sinceDay &&
+    left.untilDay === right.untilDay &&
+    left.resolution === right.resolution &&
+    left.sinceTime === right.sinceTime &&
+    left.untilTime === right.untilTime
+  );
 }
 
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
@@ -191,14 +217,6 @@ export function UsagePage() {
       ? gt("{label} ({shortcut})", { label: m(option.label), shortcut })
       : m(option.label);
   };
-  const [windowSelection, setWindowSelection] = useState(() => ({
-    days: preferences.windowDays,
-    window: makeWindow(
-      preferences.windowDays,
-      undefined,
-      preferences.windowDays === 1 ? "hour" : "day",
-    ),
-  }));
   const metric = preferences.metric;
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -208,8 +226,25 @@ export function UsagePage() {
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const hiddenProviders = new Set(preferences.hiddenProviders);
-  const { days: windowDays, window } = windowSelection;
-  const isPast24Hours = windowDays === 1;
+  const presentationsWithProviders = useAtomValue(
+    environmentPresentations.presentationsWithProvidersAtom,
+  );
+  // Ignore the provider filter here: picking a cycle is how a hidden provider comes back.
+  const cycles = collectUsageCycles(
+    selectedEnvironmentIds === null
+      ? presentationsWithProviders
+      : new Map([...presentationsWithProviders].filter(([id]) => selectedEnvironmentIds.has(id))),
+    limitsNow,
+  );
+  const period = preferences.period;
+  const [windowSelection, setWindowSelection] = useState(() => periodSelection(period, cycles));
+  let selection = windowSelection;
+  // Re-resolve when the period changes, or when its cycle's snapshot arrives or rolls over.
+  if (selection.period !== period || selection.cycleKey !== cycleResolutionKey(period, cycles)) {
+    selection = periodSelection(period, cycles);
+    setWindowSelection(selection);
+  }
+  const { window } = selection;
   const {
     merged: answeredUsage,
     environments,
@@ -224,9 +259,6 @@ export function UsagePage() {
   const refreshingUsage = isRefreshing && !showingLimits;
   const showingKept = shown !== null && shown.window !== window;
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  const presentationsWithProviders = useAtomValue(
-    environmentPresentations.presentationsWithProvidersAtom,
-  );
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -240,12 +272,21 @@ export function UsagePage() {
     setPreferences(nextPreferences);
     saveUsagePagePreferences(nextPreferences);
   };
-  const selectWindow = (days: number) => {
-    if (!isUsageWindowDays(days)) return;
-    updatePreferences({ windowDays: days });
-    setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
+  const selectPeriod = (next: UsagePeriod) => {
+    const provider = next.kind === "cycle" ? findUsageCycle(next, cycles)?.provider : undefined;
+    // A cycle measures one provider's subscription, so it narrows the filter to that provider.
+    updatePreferences(
+      provider === undefined
+        ? { period: next }
+        : { period: next, hiddenProviders: onlyProvider(provider) },
+    );
+  };
+  const showCycleSpend = (next: UsageCyclePeriod) => {
+    const provider = findUsageCycle(next, cycles)?.provider;
+    updatePreferences({
+      metric: "cost",
+      period: next,
+      ...(provider === undefined ? {} : { hiddenProviders: onlyProvider(provider) }),
     });
   };
   const selectMetric = (nextMetric: UsageMetric) => {
@@ -289,7 +330,7 @@ export function UsagePage() {
     event.preventDefault();
     event.stopPropagation();
     if (metricOption) selectMetric(metricOption.value);
-    if (periodOption && !showingLimits) selectWindow(periodOption.days);
+    if (periodOption && !showingLimits) selectPeriod({ kind: "preset", days: periodOption.days });
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window capture keydown listener for usage metric and period shortcuts
@@ -310,15 +351,9 @@ export function UsagePage() {
       });
       return;
     }
-    const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
-    if (
-      nextWindow.sinceDay !== window.sinceDay ||
-      nextWindow.untilDay !== window.untilDay ||
-      nextWindow.sinceTime !== window.sinceTime ||
-      nextWindow.untilTime !== window.untilTime
-    ) {
-      setWindowSelection({ days: windowDays, window: nextWindow });
-    }
+    const next = periodSelection(period, cycles);
+    const nextWindow = sameWindow(next.window, window) ? window : next.window;
+    if (nextWindow !== window) setWindowSelection(next);
     refreshingRef.current = true;
     setIsRefreshing(true);
     void refresh(nextWindow).finally(() => {
@@ -346,7 +381,7 @@ export function UsagePage() {
 
   const days = enumerateDays(shownWindow.sinceDay, shownWindow.untilDay);
   const hours =
-    shownWindow.sinceTime === undefined || shownWindow.untilTime === undefined
+    !shownHourly || shownWindow.sinceTime === undefined || shownWindow.untilTime === undefined
       ? []
       : enumerateHourStarts(shownWindow.sinceTime, shownWindow.untilTime);
   const showChatGptSharing =
@@ -357,8 +392,15 @@ export function UsagePage() {
         (presentation.serverConfig?.providers ?? []).some(usesChatGptSharing),
     );
 
+  // Servers that predate clipped day windows answer whole days and echo no bounds.
+  const roundedToDays =
+    !shownHourly &&
+    shownWindow.sinceTime !== undefined &&
+    selectedEnvironments.some(
+      (environment) => environment.summary !== null && environment.summary.sinceTime === undefined,
+    );
   const windowLabel =
-    shownHourly && shownWindow.sinceTime !== undefined && shownWindow.untilTime !== undefined
+    shownWindow.sinceTime !== undefined && shownWindow.untilTime !== undefined
       ? gt("{start} to {end}", {
           start: formatDateTimeShort(shownWindow.sinceTime, shownWindow.timeZone, hour12, locale),
           end: formatDateTimeShort(shownWindow.untilTime, shownWindow.timeZone, hour12, locale),
@@ -367,7 +409,6 @@ export function UsagePage() {
           start: formatDayShort(shownWindow.sinceDay, locale),
           end: formatDayShort(shownWindow.untilDay, locale),
         });
-  const windowOptionLabel = WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label;
   const metricOptionLabel = METRIC_OPTIONS.find((option) => option.value === metric)?.label;
   const topbarContent = (
     <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2 @4xl/usage-header:flex">
@@ -403,27 +444,20 @@ export function UsagePage() {
       {!showingLimits ? (
         <span className="hidden min-w-0 truncate text-xs text-muted-foreground @7xl/usage-header:block">
           {windowLabel}
+          {roundedToDays ? ` · ${gt("rounded to whole days")}` : null}
         </span>
       ) : null}
       <div className="ms-auto hidden shrink-0 items-center justify-end gap-2 @4xl/usage-header:flex">
         {/* Limits are always current, so they have no period. The period sits before the metric
             tabs so dropping it never moves them. */}
         {showingLimits ? null : (
-          <ToggleGroup
-            aria-label={gt("Usage period")}
-            variant="segmented"
-            value={[String(windowDays)]}
-            onValueChange={(next) => {
-              const value = next[0];
-              if (value) selectWindow(Number(value));
-            }}
-          >
-            {WINDOW_OPTIONS.map((option) => (
-              <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
-                {m(option.label)}
-              </Toggle>
-            ))}
-          </ToggleGroup>
+          <UsagePeriodPicker
+            period={period}
+            cycles={cycles}
+            compact={false}
+            presetTitle={shortcutTitle}
+            onSelect={selectPeriod}
+          />
         )}
         <ToggleGroup
           aria-label={gt("Usage metric")}
@@ -453,27 +487,13 @@ export function UsagePage() {
       </div>
       <div className="ms-auto flex shrink-0 items-center justify-end gap-1 @4xl/usage-header:hidden">
         {showingLimits ? null : (
-          <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
-            <SelectTrigger
-              aria-label={gt("Usage period")}
-              size="compact"
-              variant="ghost"
-              className="w-auto min-w-0"
-            >
-              <SelectValue>{windowOptionLabel && m(windowOptionLabel)}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {WINDOW_OPTIONS.map((option) => (
-                <SelectItem
-                  key={option.days}
-                  value={String(option.days)}
-                  title={shortcutTitle(option)}
-                >
-                  {m(option.label)}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
+          <UsagePeriodPicker
+            period={period}
+            cycles={cycles}
+            compact
+            presetTitle={shortcutTitle}
+            onSelect={selectPeriod}
+          />
         )}
         <Select
           value={metric}
@@ -536,6 +556,7 @@ export function UsagePage() {
                 selectedEnvironmentIds={selectedEnvironmentIds}
                 hiddenProviders={hiddenProviders}
                 now={limitsNow}
+                onShowCycleSpend={showCycleSpend}
               />
             ) : shown === null ? (
               <UsageSkeleton />

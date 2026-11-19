@@ -288,44 +288,30 @@ export function formatRelativeHourShort(
   return formatDateTimeShort(hourStart, timeZone, hour12, locale);
 }
 
+function viewerDayFormat(): { readonly timeZone: string; readonly format: Intl.DateTimeFormat } {
+  const options = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  try {
+    return { timeZone, format: new Intl.DateTimeFormat("en-CA", { timeZone, ...options }) };
+  } catch {
+    return {
+      timeZone: "UTC",
+      format: new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", ...options }),
+    };
+  }
+}
+
 export function makeWindow(
   days: number,
   now = new Date(),
   resolution: UsageResolution = "day",
 ): UsageSummaryInput {
-  let timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  let format: Intl.DateTimeFormat;
-  try {
-    format = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-  } catch {
-    timeZone = "UTC";
-    format = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-  }
-  const untilDay = format.format(now);
   if (resolution === "hour") {
     const untilTimeMs = Math.floor(now.getTime() / 60_000) * 60_000;
-    const sinceTimeMs = untilTimeMs - 24 * HOUR_MS;
-    const sinceTime = new Date(sinceTimeMs);
-    const untilTime = new Date(untilTimeMs);
-    return {
-      sinceDay: UsageDay.make(format.format(sinceTime)),
-      untilDay: UsageDay.make(format.format(untilTime)),
-      timeZone,
-      resolution,
-      sinceTime: sinceTime.toISOString(),
-      untilTime: untilTime.toISOString(),
-    };
+    return makeInstantWindow(untilTimeMs - 24 * HOUR_MS, untilTimeMs);
   }
+  const { timeZone, format } = viewerDayFormat();
+  const untilDay = format.format(now);
   // Use calendar arithmetic in UTC; fixed millisecond subtraction crosses DST days incorrectly.
   const [year = 0, month = 1, dayOfMonth = 1] = untilDay
     .split("-")
@@ -336,5 +322,29 @@ export function makeWindow(
     untilDay: UsageDay.make(untilDay),
     timeZone,
     resolution,
+  };
+}
+
+/** Whole viewer-zone days, both ends inclusive. */
+export function makeDayRangeWindow(sinceDay: UsageDay, untilDay: UsageDay): UsageSummaryInput {
+  return { sinceDay, untilDay, timeZone: viewerDayFormat().timeZone, resolution: "day" };
+}
+
+/**
+ * Exact instants, start inclusive and end exclusive. Spans up to 24 hours chart by hour; longer
+ * spans chart by day and the server clips the edge days to the instants.
+ */
+export function makeInstantWindow(sinceTimeMs: number, untilTimeMs: number): UsageSummaryInput {
+  const { timeZone, format } = viewerDayFormat();
+  const sinceTime = new Date(sinceTimeMs);
+  const untilTime = new Date(untilTimeMs);
+  return {
+    sinceDay: UsageDay.make(format.format(sinceTime)),
+    // The end is exclusive, so an end at midnight must not add an empty day.
+    untilDay: UsageDay.make(format.format(new Date(Math.max(sinceTimeMs, untilTimeMs - 1)))),
+    timeZone,
+    resolution: untilTimeMs - sinceTimeMs <= 24 * HOUR_MS ? "hour" : "day",
+    sinceTime: sinceTime.toISOString(),
+    untilTime: untilTime.toISOString(),
   };
 }

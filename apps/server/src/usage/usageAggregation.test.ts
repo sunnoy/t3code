@@ -254,6 +254,35 @@ describe("UsageAggregator", () => {
     ]);
   });
 
+  it("clips a day window's edge days to its exact bounds", () => {
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-03",
+      untilDay: "2026-08-10",
+      resolution: "day",
+      sinceTimeMs: Date.parse("2026-08-03T14:37:00.000Z"),
+      untilTimeMs: Date.parse("2026-08-10T14:37:00.000Z"),
+      rates,
+    });
+    for (const timestamp of [
+      "2026-08-03T14:36:59.999Z",
+      "2026-08-03T14:37:00.000Z",
+      "2026-08-06T09:00:00.000Z",
+      "2026-08-10T14:36:59.999Z",
+      "2026-08-10T14:37:00.000Z",
+    ]) {
+      aggregator.add(record({ timestampMs: Date.parse(timestamp) }));
+    }
+    const result = aggregator.finish();
+
+    expect(result.outOfWindow).toBe(2);
+    expect(result.buckets.map((bucket) => [bucket.day, bucket.hourStart])).toEqual([
+      ["2026-08-03", undefined],
+      ["2026-08-06", undefined],
+      ["2026-08-10", undefined],
+    ]);
+  });
+
   it("counts tokens but not cost for a model with no rate", () => {
     const result = aggregate([record({ model: "kimi-k3" })]);
 

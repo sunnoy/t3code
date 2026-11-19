@@ -33,11 +33,17 @@ import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { providerClients } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { PaceIcon, ResetCreditDialog, barColor, usePaceMark, useResetCredit } from "./UsageLimits";
+import {
+  collectUsageCycles,
+  cyclePeriod,
+  type UsageCycle,
+  type UsageCyclePeriod,
+} from "./usagePeriod";
 import {
   collectExternalUsageLinks,
   collectLimitNotices,
@@ -595,12 +601,14 @@ function PoolWindowCard({
   now,
   label,
   description,
+  onShowSpend,
 }: {
   readonly pool: LimitPoolWindow;
   readonly color: string;
   readonly now: number;
   readonly label?: string | null | undefined;
   readonly description?: string | undefined;
+  readonly onShowSpend?: (() => void) | undefined;
 }) {
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
   return (
@@ -625,6 +633,13 @@ function PoolWindowCard({
             ↻ +{nextRefill.restoresPercent}%
           </span>
         ) : null}
+        {onShowSpend ? (
+          <span className="self-start text-xs">
+            <InlineButton tone="muted" onClick={onShowSpend}>
+              <T>Spend this cycle →</T>
+            </InlineButton>
+          </span>
+        ) : null}
       </div>
       <PoolBar pool={pool} color={color} now={now} />
       {description ? (
@@ -634,7 +649,17 @@ function PoolWindowCard({
   );
 }
 
-function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+function PoolSection({
+  pool,
+  now,
+  cycles,
+  onShowCycleSpend,
+}: {
+  readonly pool: LimitPool;
+  readonly now: number;
+  readonly cycles: readonly UsageCycle[];
+  readonly onShowCycleSpend?: ((period: UsageCyclePeriod) => void) | undefined;
+}) {
   const color = barColor(pool.driver);
   const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
@@ -654,6 +679,16 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
       {windows.map((window) => {
         const details =
           pool.driver === "cursor" ? cursorUsageWindowDetails(window.id, pool, m) : undefined;
+        // Usage records carry no account, so a shared pool shows its soonest-resetting member's cycle.
+        const cycle = window.members
+          .map((member) =>
+            cycles.find(
+              (candidate) =>
+                candidate.accountKey === member.account.key &&
+                candidate.windowId === member.window.id,
+            ),
+          )
+          .find((candidate) => candidate !== undefined);
         return (
           <PoolWindowCard
             key={`${window.kind}:${window.id}`}
@@ -662,6 +697,11 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
             now={now}
             label={details?.label}
             description={details?.description}
+            onShowSpend={
+              cycle && onShowCycleSpend
+                ? () => onShowCycleSpend(cyclePeriod(cycle, false))
+                : undefined
+            }
           />
         );
       })}
@@ -672,15 +712,18 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
 export function UsageLimitsPooled({
   presentations,
   now,
+  onShowCycleSpend,
 }: {
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
+  readonly onShowCycleSpend?: ((period: UsageCyclePeriod) => void) | undefined;
 }) {
   const gt = useGT();
   const m = useMessages();
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const cycles = collectUsageCycles(presentations, now);
   const notices = collectLimitNotices(presentations, m);
   const externalLinks = collectExternalUsageLinks(presentations, m);
   return (
@@ -693,7 +736,12 @@ export function UsageLimitsPooled({
       <SegmentPopoverContext value={segmentPopover}>
         {pools.map((pool) => (
           <Fragment key={pool.driver}>
-            <PoolSection pool={pool} now={now} />
+            <PoolSection
+              pool={pool}
+              now={now}
+              cycles={cycles}
+              onShowCycleSpend={onShowCycleSpend}
+            />
           </Fragment>
         ))}
       </SegmentPopoverContext>

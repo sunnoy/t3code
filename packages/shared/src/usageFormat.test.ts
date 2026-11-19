@@ -1,8 +1,15 @@
 // @effect-diagnostics globalDate:off -- A fixed instant keeps calendar-window assertions deterministic.
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { UsageSource } from "@t3tools/contracts";
+import { UsageDay, type UsageSource } from "@t3tools/contracts";
 
-import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatHourShort,
+  formatTokens,
+  makeDayRangeWindow,
+  makeInstantWindow,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -174,6 +181,63 @@ describe("hourly usage formatting", () => {
     } finally {
       resolvedOptions.mockRestore();
     }
+  });
+});
+
+describe("range windows", () => {
+  const inUtc = <T>(run: () => T): T => {
+    const resolved = new Intl.DateTimeFormat().resolvedOptions();
+    const spy = vi
+      .spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
+      .mockReturnValue({ ...resolved, timeZone: "UTC" });
+    try {
+      return run();
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it("charts a span of at most 24 hours by hour", () => {
+    const window = inUtc(() =>
+      makeInstantWindow(Date.parse("2026-08-11T09:00:00Z"), Date.parse("2026-08-11T14:00:00Z")),
+    );
+
+    expect(window).toMatchObject({
+      resolution: "hour",
+      sinceDay: "2026-08-11",
+      untilDay: "2026-08-11",
+      sinceTime: "2026-08-11T09:00:00.000Z",
+      untilTime: "2026-08-11T14:00:00.000Z",
+    });
+  });
+
+  it("charts a longer span by day and keeps its exact bounds", () => {
+    const window = inUtc(() =>
+      makeInstantWindow(Date.parse("2026-08-05T14:37:00Z"), Date.parse("2026-08-12T14:37:00Z")),
+    );
+
+    expect(window).toMatchObject({
+      resolution: "day",
+      sinceDay: "2026-08-05",
+      untilDay: "2026-08-12",
+      sinceTime: "2026-08-05T14:37:00.000Z",
+    });
+  });
+
+  it("does not add an empty day for an end at midnight", () => {
+    const window = inUtc(() =>
+      makeInstantWindow(Date.parse("2026-08-05T00:00:00Z"), Date.parse("2026-08-12T00:00:00Z")),
+    );
+
+    expect(window.untilDay).toBe("2026-08-11");
+  });
+
+  it("keeps whole days for a date range", () => {
+    const window = makeDayRangeWindow(UsageDay.make("2026-08-01"), UsageDay.make("2026-08-15"));
+
+    expect(window).toMatchObject({ sinceDay: "2026-08-01", untilDay: "2026-08-15" });
+    expect(window.resolution).toBe("day");
+    expect(window.sinceTime).toBeUndefined();
   });
 });
 

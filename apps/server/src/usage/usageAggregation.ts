@@ -217,7 +217,9 @@ export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
   readonly #seen = new Map<string, Contribution>();
   readonly #toDay: (timestampMs: number) => string;
-  readonly #hourlyWindow: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null;
+  /** Exact instant bounds; hourly windows also anchor their buckets to the start. */
+  readonly #bounds: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null;
+  readonly #hourly: boolean;
   readonly #options: AggregateOptions;
   #lastBucket: {
     readonly day: string;
@@ -233,16 +235,13 @@ export class UsageAggregator {
   constructor(options: AggregateOptions) {
     this.#options = options;
     this.#toDay = makeDayFormatter(options.timeZone);
-    if (options.resolution === "hour") {
-      if (options.sinceTimeMs === undefined || options.untilTimeMs === undefined) {
-        throw new Error("Hourly usage aggregation requires exact time bounds");
-      }
-      this.#hourlyWindow = {
-        sinceTimeMs: options.sinceTimeMs,
-        untilTimeMs: options.untilTimeMs,
-      };
+    this.#hourly = options.resolution === "hour";
+    if (options.sinceTimeMs !== undefined && options.untilTimeMs !== undefined) {
+      this.#bounds = { sinceTimeMs: options.sinceTimeMs, untilTimeMs: options.untilTimeMs };
+    } else if (this.#hourly) {
+      throw new Error("Hourly usage aggregation requires exact time bounds");
     } else {
-      this.#hourlyWindow = null;
+      this.#bounds = null;
     }
   }
 
@@ -276,26 +275,23 @@ export class UsageAggregator {
   }
 
   #placeInWindow(record: UsageRecord, source: string): MutableBucket | null {
+    const bounds = this.#bounds;
     if (
-      this.#hourlyWindow !== null &&
-      (record.timestampMs < this.#hourlyWindow.sinceTimeMs ||
-        record.timestampMs >= this.#hourlyWindow.untilTimeMs)
+      bounds !== null &&
+      (record.timestampMs < bounds.sinceTimeMs || record.timestampMs >= bounds.untilTimeMs)
     ) {
       return null;
     }
 
     const day = this.#toDay(record.timestampMs);
-    if (
-      this.#hourlyWindow === null &&
-      (day < this.#options.sinceDay || day > this.#options.untilDay)
-    ) {
+    if (bounds === null && (day < this.#options.sinceDay || day > this.#options.untilDay)) {
       return null;
     }
 
     const hourIndex =
-      this.#hourlyWindow === null
+      bounds === null || !this.#hourly
         ? -1
-        : Math.floor((record.timestampMs - this.#hourlyWindow.sinceTimeMs) / HOUR_MS);
+        : Math.floor((record.timestampMs - bounds.sinceTimeMs) / HOUR_MS);
     return this.#bucketFor(day, hourIndex, record.provider, record.model, source);
   }
 
@@ -373,9 +369,11 @@ export class UsageAggregator {
     ) {
       return last.bucket;
     }
-    const window = this.#hourlyWindow;
+    const bounds = this.#bounds;
     const hourStart =
-      window === null ? "" : new Date(window.sinceTimeMs + hourIndex * HOUR_MS).toISOString();
+      bounds === null || hourIndex < 0
+        ? ""
+        : new Date(bounds.sinceTimeMs + hourIndex * HOUR_MS).toISOString();
     const key = `${day}\u0000${hourStart}\u0000${provider}\u0000${model}\u0000${source}`;
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
