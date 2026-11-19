@@ -13,6 +13,8 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   cyclePeriod,
+  cycleSpanKey,
+  distinctCycleSpans,
   findUsageCycle,
   localUsageDay,
   type UsageCycle,
@@ -63,6 +65,7 @@ export function UsagePeriodPicker({
   period,
   cycles,
   compact,
+  rangeLabel,
   presetTitle,
   onSelect,
 }: {
@@ -70,6 +73,8 @@ export function UsagePeriodPicker({
   readonly cycles: readonly UsageCycle[];
   /** Narrow headers fold the presets into the popover instead of a segmented control. */
   readonly compact: boolean;
+  /** The exact span being shown; the header hides it below its widest breakpoint. */
+  readonly rangeLabel: string;
   readonly presetTitle: (option: PresetOption) => string;
   readonly onSelect: (period: UsagePeriod) => void;
 }) {
@@ -89,6 +94,7 @@ export function UsagePeriodPicker({
             variant="ghost"
             size={compact || period.kind !== "preset" ? "compact" : "icon-sm"}
             aria-label={gt("More usage periods")}
+            title={rangeLabel}
             className="max-w-72 min-w-0"
           />
         }
@@ -152,10 +158,23 @@ function UsagePeriodMenu({
   const [today] = useState(() => new Date());
   const instant = (ms: number) =>
     formatDateTimeShort(new Date(ms).toISOString(), undefined, hour12, locale);
-  const option = (key: string, next: UsagePeriod, title: string, detail?: string) => (
+  const selectedCycle = period.kind === "cycle" ? findUsageCycle(period, cycles) : undefined;
+  // A selection made from a merged row's twin (the Limits card) still marks the shared row.
+  const cycleActive = (cycle: UsageCycle, previous: boolean) =>
+    period.kind === "cycle" &&
+    period.previous === previous &&
+    selectedCycle !== undefined &&
+    cycleSpanKey(selectedCycle) === cycleSpanKey(cycle);
+  const option = (
+    key: string,
+    next: UsagePeriod,
+    title: string,
+    detail?: string,
+    active = samePeriod(period, next),
+  ) => (
     <Button
       key={key}
-      variant={samePeriod(period, next) ? "secondary" : "ghost"}
+      variant={active ? "secondary" : "ghost"}
       size="compact"
       className="w-full justify-between"
       onClick={() => onSelect(next)}
@@ -187,7 +206,7 @@ function UsagePeriodMenu({
             {gt("No provider on the selected environments reports a reset cycle.")}
           </p>
         ) : (
-          cycles.map((cycle) => (
+          distinctCycleSpans(cycles).map((cycle) => (
             <div key={`${cycle.accountKey}:${cycle.windowId}`} className="flex flex-col gap-0.5">
               <span className="px-1 text-sm font-medium text-foreground">{cycleName(cycle)}</span>
               {option(
@@ -198,6 +217,7 @@ function UsagePeriodMenu({
                   start: instant(cycle.startMs),
                   end: instant(cycle.resetsAtMs),
                 }),
+                cycleActive(cycle, false),
               )}
               {option(
                 "previous",
@@ -207,6 +227,7 @@ function UsagePeriodMenu({
                   start: instant(cycle.startMs - cycle.durationMs),
                   end: instant(cycle.startMs),
                 }),
+                cycleActive(cycle, true),
               )}
             </div>
           ))

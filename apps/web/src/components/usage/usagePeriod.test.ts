@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   collectUsageCycles,
   cyclePeriod,
+  distinctCycleSpans,
   resolveUsagePeriod,
   type UsageCycle,
 } from "./usagePeriod";
@@ -70,6 +71,25 @@ describe("collectUsageCycles", () => {
       startMs: Date.parse("2026-08-30T09:30:00.000Z"),
       resetsAtMs: Date.parse("2026-09-06T09:30:00.000Z"),
     });
+  });
+
+  it("lists windows that reset together once", () => {
+    const cycles = collectUsageCycles(
+      presentations([
+        provider("claudeAgent", [
+          { ...weekly, id: "seven_day", label: "Weekly" },
+          { ...weekly, id: "seven_day_fable", label: "Weekly · Fable" },
+          { ...weekly, id: "five_hour", label: "Session", windowDurationMins: 300 },
+        ]),
+      ]),
+      now,
+    );
+
+    expect(cycles).toHaveLength(3);
+    expect(distinctCycleSpans(cycles).map((cycle) => cycle.windowId)).toEqual([
+      "seven_day",
+      "five_hour",
+    ]);
   });
 
   it("maps a driver to its usage provider", () => {

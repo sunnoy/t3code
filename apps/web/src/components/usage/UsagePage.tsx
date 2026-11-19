@@ -409,6 +409,9 @@ export function UsagePage() {
           start: formatDayShort(shownWindow.sinceDay, locale),
           end: formatDayShort(shownWindow.untilDay, locale),
         });
+  const rangeLabel = roundedToDays
+    ? `${windowLabel} · ${gt("rounded to whole days")}`
+    : windowLabel;
   const metricOptionLabel = METRIC_OPTIONS.find((option) => option.value === metric)?.label;
   const topbarContent = (
     <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2 @4xl/usage-header:flex">
@@ -443,8 +446,7 @@ export function UsagePage() {
       </WorkspaceBreadcrumb>
       {!showingLimits ? (
         <span className="hidden min-w-0 truncate text-xs text-muted-foreground @7xl/usage-header:block">
-          {windowLabel}
-          {roundedToDays ? ` · ${gt("rounded to whole days")}` : null}
+          {rangeLabel}
         </span>
       ) : null}
       <div className="ms-auto hidden shrink-0 items-center justify-end gap-2 @4xl/usage-header:flex">
@@ -455,6 +457,7 @@ export function UsagePage() {
             period={period}
             cycles={cycles}
             compact={false}
+            rangeLabel={rangeLabel}
             presetTitle={shortcutTitle}
             onSelect={selectPeriod}
           />
@@ -491,6 +494,7 @@ export function UsagePage() {
             period={period}
             cycles={cycles}
             compact
+            rangeLabel={rangeLabel}
             presetTitle={shortcutTitle}
             onSelect={selectPeriod}
           />

@@ -87,6 +87,24 @@ export function collectUsageCycles(
   });
 }
 
+/**
+ * Usage records carry no limit scope, so windows that reset together (Claude's weekly and its
+ * Fable-only weekly) cover the same spend and need only one row.
+ */
+export function cycleSpanKey(cycle: UsageCycle): string {
+  return [cycle.provider, cycle.accountKey, cycle.startMs, cycle.durationMs].join("\u0000");
+}
+
+export function distinctCycleSpans(cycles: readonly UsageCycle[]): readonly UsageCycle[] {
+  const seen = new Set<string>();
+  return cycles.filter((cycle) => {
+    const key = cycleSpanKey(cycle);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function cyclePeriod(cycle: UsageCycle, previous: boolean): UsageCyclePeriod {
   return {
     kind: "cycle",
