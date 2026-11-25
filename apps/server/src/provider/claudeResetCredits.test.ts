@@ -1,11 +1,15 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - the test observes HTTP CONNECT at the proxy.
+import * as NodeHttp from "node:http";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse, UrlParams } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse, UrlParams } from "effect/http";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as ClaudeResetCredits from "./claudeResetCredits.ts";
@@ -18,7 +22,7 @@ const grant = (overrides: Record<string, unknown>) => ({
   ...overrides,
 });
 
-const writeLogin = Effect.gen(function* () {
+const writeLogin = Effect.fnUntraced(function* (proxy: string | null = "http://127.0.0.1:9999") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const directory = yield* fs.makeTempDirectoryScoped();
@@ -28,6 +32,12 @@ const writeLogin = Effect.gen(function* () {
   );
   const accountConfigPath = path.join(directory, ".claude.json");
   yield* fs.writeFileString(accountConfigPath, '{"oauthAccount":{"organizationUuid":"org-1"}}');
+  if (proxy !== null) {
+    yield* fs.writeFileString(
+      path.join(directory, "settings.json"),
+      JSON.stringify({ env: { HTTPS_PROXY: proxy } }),
+    );
+  }
   return { configDir: directory, accountConfigPath };
 });
 
@@ -36,6 +46,27 @@ const respond = (status: number, body: unknown) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body, { status }))),
   );
 const refuseRequests = HttpClient.make(() => Effect.die("must not send a request"));
+
+const refusingProxy = Effect.fnUntraced(function* () {
+  const connections: Array<{ target: string | undefined; auth: string | undefined }> = [];
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(
+      () =>
+        new Promise<ReturnType<typeof NodeHttp.createServer>>((resolve) => {
+          const server = NodeHttp.createServer();
+          server.on("connect", (request, socket) => {
+            connections.push({ target: request.url, auth: request.headers["proxy-authorization"] });
+            socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nConnection: close\r\n\r\n");
+          });
+          server.listen(0, "127.0.0.1", () => resolve(server));
+        }),
+    ),
+    (server) => Effect.sync(() => server.close()),
+  );
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected a TCP proxy");
+  return { authority: `127.0.0.1:${address.port}`, connections };
+});
 
 describe("claudeResetCreditsToContract", () => {
   it("counts live grants and pins the next usable one", () => {
@@ -132,7 +163,7 @@ describe("claudeResetCreditsToContract", () => {
 effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
   it.effect("reads the grants with the CLI's request", () =>
     Effect.gen(function* () {
-      const { configDir } = yield* writeLogin;
+      const { configDir } = yield* writeLogin();
       const client = HttpClient.make((request) => {
         expect(request.method).toBe("GET");
         expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
@@ -159,7 +190,7 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
 
   it.effect("reads nothing from keychain logins or failed requests", () =>
     Effect.gen(function* () {
-      const { configDir } = yield* writeLogin;
+      const { configDir } = yield* writeLogin();
       const darwin = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
         Effect.provideService(HostProcess.Platform, "darwin"),
         Effect.provideService(HttpClient.HttpClient, refuseRequests),
@@ -171,6 +202,74 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
       expect([darwin, limited]).toEqual([undefined, undefined]);
     }),
   );
+
+  it.effect("reads and redeems nothing when the profile has no valid proxy", () =>
+    Effect.gen(function* () {
+      for (const proxy of [null, "socks5://127.0.0.1:9999"]) {
+        const login = yield* writeLogin(proxy);
+        const credits = yield* ClaudeResetCredits.readClaudeResetCredits(login.configDir, "2.1.0");
+        expect(credits).toBeUndefined();
+        const redemption = yield* ClaudeResetCredits.consumeClaudeResetCredit({
+          ...login,
+          version: "2.1.0",
+          grantId: "grant_a",
+          requestId: "r-1",
+        }).pipe(Effect.result);
+        expect(redemption).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: "proxyUnavailable" },
+        });
+        if (redemption._tag === "Failure") {
+          expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(redemption.failure)).toBe(
+            false,
+          );
+        }
+      }
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HttpClient.HttpClient, refuseRequests),
+    ),
+  );
+
+  effectIt.live(
+    "sends each profile through its own proxy and keeps credentials in the tunnel",
+    () =>
+      Effect.gen(function* () {
+        const readProxy = yield* refusingProxy();
+        const redeemProxy = yield* refusingProxy();
+        const reader = yield* writeLogin(`http://${readProxy.authority}`);
+        const redeemer = yield* writeLogin(`http://proxy:secret@${redeemProxy.authority}`);
+        const [credits, redemption] = yield* Effect.all(
+          [
+            ClaudeResetCredits.readClaudeResetCredits(reader.configDir, "2.1.0"),
+            ClaudeResetCredits.consumeClaudeResetCredit({
+              ...redeemer,
+              version: "2.1.0",
+              grantId: "grant_a",
+              requestId: "r-1",
+            }).pipe(Effect.result),
+          ],
+          { concurrency: 2 },
+        );
+        expect(credits).toBeUndefined();
+        expect(redemption).toMatchObject({ _tag: "Failure", failure: { reason: "requestFailed" } });
+        expect(readProxy.connections).toEqual([
+          { target: "api.anthropic.com:443", auth: undefined },
+        ]);
+        expect(redeemProxy.connections).toEqual([
+          {
+            target: "api.anthropic.com:443",
+            auth: `Basic ${Buffer.from("proxy:secret").toString("base64")}`,
+          },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(FetchHttpClient.layer, NodeServices.layer)),
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(FetchHttpClient.Fetch, () => {
+          throw new Error("Refusing to test a direct request");
+        }),
+      ),
+  );
 });
 
 const ClaimBody = Schema.fromJsonString(
@@ -180,7 +279,7 @@ const decodeClaimBody = Schema.decodeEffect(ClaimBody);
 
 const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requestId: "r-1" }) =>
   Effect.gen(function* () {
-    const login = yield* writeLogin;
+    const login = yield* writeLogin();
     return yield* ClaudeResetCredits.consumeClaudeResetCredit({
       ...login,
       version: "2.1.0",
