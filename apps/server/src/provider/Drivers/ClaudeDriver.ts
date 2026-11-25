@@ -375,6 +375,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           configDir,
           (requestId) =>
             ClaudeResetCredits.consumeClaudeResetCredit({
+              providerInstanceId: instanceId,
               configDir,
               accountConfigPath,
               version,

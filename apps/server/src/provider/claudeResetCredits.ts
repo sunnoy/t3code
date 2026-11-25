@@ -257,18 +257,22 @@ const profileProxy = Effect.fn("claudeResetCredits.profileProxy")(function* (con
 });
 
 // Use an explicit per-request dispatcher so host proxy variables and NO_PROXY cannot reroute a claim.
-const withProfileProxy = <A, E, R>(configDir: string, request: Effect.Effect<A, E, R>) =>
+const withProfileProxy = <A, E, R>(
+  configDir: string,
+  request: (proxyOrigin: string) => Effect.Effect<A, E, R>,
+) =>
   Effect.acquireUseRelease(
     profileProxy(configDir).pipe(
       Effect.flatMap((uri) =>
         Effect.try({
-          try: () => makeHttpProxyFetch(uri),
+          // URL.origin omits the proxy username and password.
+          try: () => ({ ...makeHttpProxyFetch(uri), origin: uri.origin }),
           catch: () => new ClaudeResetCreditError({ reason: "proxyUnavailable" }),
         }),
       ),
     ),
     (proxy) =>
-      request.pipe(
+      request(proxy.origin).pipe(
         Effect.provideService(FetchHttpClient.Fetch, proxy.fetch),
         Effect.provideService(HttpClient.TracerPropagationEnabled, false),
       ),
@@ -283,7 +287,7 @@ export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
   function* (configDir: string, version: string) {
     const token = yield* readAccessToken(configDir);
     if (!token) return undefined;
-    return yield* withProfileProxy(configDir, readUsage(token, version));
+    return yield* withProfileProxy(configDir, () => readUsage(token, version));
   },
   Effect.timeout("10 seconds"),
   Effect.orElseSucceed(() => undefined),
@@ -334,6 +338,7 @@ const CLAIM_OUTCOMES = {
 
 /** requestId is the claim's idempotency key. */
 export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(function* (input: {
+  readonly providerInstanceId: string;
   readonly configDir: string;
   readonly accountConfigPath: string;
   readonly version: string;
@@ -353,7 +358,21 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   if (!token || !organization) {
     return yield* new ClaudeResetCreditError({ reason: "signedOut" });
   }
-  return yield* withProfileProxy(input.configDir, redeemGrant(input, token, organization));
+  return yield* withProfileProxy(input.configDir, (proxy) =>
+    Effect.logInfo("Claude reset credit sending").pipe(
+      Effect.andThen(redeemGrant(input, token, organization)),
+      Effect.tap((outcome) => Effect.logInfo("Claude reset credit completed", { outcome })),
+      Effect.tapError(({ reason }) => Effect.logWarning("Claude reset credit failed", { reason })),
+      Effect.annotateLogs({ proxy }),
+    ),
+  ).pipe(
+    Effect.tapError(({ reason }) =>
+      reason === "proxyUnavailable"
+        ? Effect.logWarning("Claude reset credit not sent", { reason })
+        : Effect.void,
+    ),
+    Effect.annotateLogs({ providerInstanceId: input.providerInstanceId }),
+  );
 });
 
 const redeemGrant = Effect.fnUntraced(function* (
@@ -382,6 +401,7 @@ const redeemGrant = Effect.fnUntraced(function* (
       Effect.timeout("25 seconds"),
       Effect.mapError(() => new ClaudeResetCreditError({ reason: "requestFailed" })),
     );
+  yield* Effect.logInfo("Claude reset credit response", { httpStatus: response.status });
   if (response.status === 429) {
     return yield* new ClaudeResetCreditError({ reason: "rateLimited" });
   }
