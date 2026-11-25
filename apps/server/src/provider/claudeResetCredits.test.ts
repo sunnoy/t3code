@@ -7,7 +7,9 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientResponse, UrlParams } from "effect/http";
 import { describe, expect, it } from "vite-plus/test";
@@ -46,6 +48,14 @@ const respond = (status: number, body: unknown) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body, { status }))),
   );
 const refuseRequests = HttpClient.make(() => Effect.die("must not send a request"));
+
+const captureLogs = () => {
+  const entries: Array<{ message: unknown; annotations: Readonly<Record<string, unknown>> }> = [];
+  const logger = Logger.make<unknown, void>(({ message, fiber }) => {
+    entries.push({ message, annotations: fiber.getRef(References.CurrentLogAnnotations) });
+  });
+  return { entries, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+};
 
 const refusingProxy = Effect.fnUntraced(function* () {
   const connections: Array<{ target: string | undefined; auth: string | undefined }> = [];
@@ -211,6 +221,7 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
         expect(credits).toBeUndefined();
         const redemption = yield* ClaudeResetCredits.consumeClaudeResetCredit({
           ...login,
+          providerInstanceId: "claude-missing-proxy",
           version: "2.1.0",
           grantId: "grant_a",
           requestId: "r-1",
@@ -233,8 +244,9 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
 
   effectIt.live(
     "sends each profile through its own proxy and keeps credentials in the tunnel",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const logs = captureLogs();
+      return Effect.gen(function* () {
         const readProxy = yield* refusingProxy();
         const redeemProxy = yield* refusingProxy();
         const reader = yield* writeLogin(`http://${readProxy.authority}`);
@@ -244,6 +256,7 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
             ClaudeResetCredits.readClaudeResetCredits(reader.configDir, "2.1.0"),
             ClaudeResetCredits.consumeClaudeResetCredit({
               ...redeemer,
+              providerInstanceId: "claude-ccicc",
               version: "2.1.0",
               grantId: "grant_a",
               requestId: "r-1",
@@ -262,13 +275,22 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
             auth: `Basic ${Buffer.from("proxy:secret").toString("base64")}`,
           },
         ]);
+        const annotations = {
+          providerInstanceId: "claude-ccicc",
+          proxy: `http://${redeemProxy.authority}`,
+        };
+        expect(logs.entries).toEqual([
+          { message: ["Claude reset credit sending"], annotations },
+          { message: ["Claude reset credit failed", { reason: "requestFailed" }], annotations },
+        ]);
       }).pipe(
-        Effect.provide(Layer.merge(FetchHttpClient.layer, NodeServices.layer)),
+        Effect.provide(Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer, logs.layer)),
         Effect.provideService(HostProcess.Platform, "linux"),
         Effect.provideService(FetchHttpClient.Fetch, () => {
           throw new Error("Refusing to test a direct request");
         }),
-      ),
+      );
+    },
   );
 });
 
@@ -282,6 +304,7 @@ const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requ
     const login = yield* writeLogin();
     return yield* ClaudeResetCredits.consumeClaudeResetCredit({
       ...login,
+      providerInstanceId: "claude-cctcc",
       version: "2.1.0",
       ...ids,
     }).pipe(
@@ -292,8 +315,9 @@ const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requ
   });
 
 effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
-  it.effect("claims the grant for the organization", () =>
-    Effect.gen(function* () {
+  it.effect("claims the grant for the organization and logs the response", () => {
+    const logs = captureLogs();
+    return Effect.gen(function* () {
       const client = HttpClient.make((request) =>
         Effect.gen(function* () {
           expect(request.method).toBe("POST");
@@ -312,8 +336,14 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         }).pipe(Effect.orDie),
       );
       expect(yield* consume(client)).toMatchObject({ _tag: "Success", success: "reset" });
-    }),
-  );
+      const annotations = { providerInstanceId: "claude-cctcc", proxy: "http://127.0.0.1:9999" };
+      expect(logs.entries).toEqual([
+        { message: ["Claude reset credit sending"], annotations },
+        { message: ["Claude reset credit response", { httpStatus: 200 }], annotations },
+        { message: ["Claude reset credit completed", { outcome: "reset" }], annotations },
+      ]);
+    }).pipe(Effect.provide(logs.layer));
+  });
 
   it.effect("maps each answer to an outcome or a failure", () =>
     Effect.gen(function* () {
