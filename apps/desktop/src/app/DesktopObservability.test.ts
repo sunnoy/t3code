@@ -1,5 +1,4 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import desktopPackageJson from "../../package.json" with { type: "json" };
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -26,19 +25,6 @@ const DesktopBackendChildLogRecord = Schema.Struct({
 const decodeDesktopBackendChildLogRecord = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendChildLogRecord),
 );
-
-const TraceRecordLine = Schema.Struct({
-  name: Schema.String,
-  attributes: Schema.Record(Schema.String, Schema.Unknown),
-  events: Schema.Array(
-    Schema.Struct({
-      name: Schema.String,
-      attributes: Schema.Record(Schema.String, Schema.Unknown),
-    }),
-  ),
-});
-
-const decodeTraceRecordLine = Schema.decodeUnknownSync(Schema.fromJsonString(TraceRecordLine));
 
 const environmentInput = (baseDir: string) =>
   ({
@@ -181,16 +167,7 @@ describe("DesktopObservability", () => {
       assert.equal(end.annotations.phase, "END");
       assert.equal(end.annotations.details, "code=1");
 
-      const traceRecords = (yield* fileSystem.readFileString(tracePath))
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => decodeTraceRecordLine(line));
-      assert.isFalse(
-        traceRecords.some(
-          (record) => record.name === "desktop.observability.backendOutput.writeOutputChunk",
-        ),
-      );
+      assert.isFalse(yield* fileSystem.exists(tracePath));
     }).pipe(
       Effect.scoped,
       Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, layerEmptyEnv)),
@@ -302,7 +279,7 @@ describe("DesktopObservability", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("stops every export when the OpenTelemetry SDK is disabled", () => {
+  it.effect("ignores configured exporters when the environment tries to enable the SDK", () => {
     const requests: Array<ExportedRequest> = [];
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -329,70 +306,11 @@ describe("DesktopObservability", () => {
         Layer.mergeAll(
           NodeServices.layer,
           layerCollector(requests),
-          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { OTEL_SDK_DISABLED: "true" } })),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { T3CODE_OTEL_SDK_DISABLED: "false" } }),
+          ),
         ),
       ),
-    );
-  });
-
-  it.effect("reports the app's own version for an unpackaged desktop run", () => {
-    const requests: Array<ExportedRequest> = [];
-    return Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-observability-test-",
-      });
-      const layerEnvironment = layerEnvironmentFor(baseDir);
-      yield* writeObservabilitySettings(layerEnvironment, {
-        otlpLogsUrl: "https://settings.example.com/v1/logs",
-      });
-
-      yield* Effect.scoped(
-        Effect.logInfo("desktop resource under test").pipe(
-          Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))),
-        ),
-      );
-
-      const body = requests.map((request) => request.body).join("\n");
-      assert.include(
-        body,
-        `"key":"service.version","value":{"stringValue":"${desktopPackageJson.version}"}`,
-      );
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, layerCollector(requests), layerEmptyEnv)),
-    );
-  });
-
-  it.effect("describes the Node runtime and the desktop mode under semantic or t3code keys", () => {
-    const requests: Array<ExportedRequest> = [];
-    return Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-observability-test-",
-      });
-      const layerEnvironment = layerEnvironmentFor(baseDir);
-      yield* writeObservabilitySettings(layerEnvironment, {
-        otlpLogsUrl: "https://settings.example.com/v1/logs",
-      });
-
-      yield* Effect.scoped(
-        Effect.logInfo("desktop resource under test").pipe(
-          Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))),
-        ),
-      );
-
-      const body = requests.map((request) => request.body).join("\n");
-      assert.include(body, '"key":"process.runtime.name","value":{"stringValue":"nodejs"}');
-      assert.include(
-        body,
-        `"key":"process.runtime.version","value":{"stringValue":"${process.versions.node}"}`,
-      );
-      assert.include(body, '"key":"t3code.desktop.mode","value":{"stringValue":"development"}');
-      assert.notInclude(body, "service.mode");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, layerCollector(requests), layerEmptyEnv)),
     );
   });
 });

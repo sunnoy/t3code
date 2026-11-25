@@ -1439,15 +1439,8 @@ const layerThemeToolkit = toolkitRegistration(ThemeToolkit, ThemeHandlers.layer)
 
 export const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
-// Reports may name any tool this server advertises, read when a report arrives.
 const layerFeedbackToolkit = toolkitRegistration(FeedbackToolkit, FeedbackHandlers.layer).pipe(
-  Layer.provide(
-    Layer.unwrap(
-      Effect.map(McpServer.McpServer, (server) =>
-        Feedback.layer(() => server.tools.map(({ tool }) => tool.name)),
-      ),
-    ),
-  ),
+  Layer.provide(Feedback.layerDisabled),
 );
 
 export const layerAttachmentToolkit = toolkitRegistration(

@@ -150,7 +150,6 @@
         "scripts/install.ts",
         "scripts/install-ci.ts",
         "src/runHook.ts",
-        "src/flush.ts",
         "src/nativeRunHook.js",
         "src/preload.mjs",
       ],

@@ -1716,6 +1716,7 @@ function verifyClerkOAuthBearerToken(
   return Effect.tryPromise({
     try: async () => {
       const client = createClerkClient({
+        telemetry: { disabled: true },
         secretKey: Redacted.value(config.clerkSecretKey),
         publishableKey: config.clerkPublishableKey,
       });

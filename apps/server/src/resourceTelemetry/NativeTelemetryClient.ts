@@ -1060,6 +1060,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
   });
 });
 
+/** @public */
 export const layer = Layer.effect(NativeTelemetryClient, make());
 
 export const layerTest = (

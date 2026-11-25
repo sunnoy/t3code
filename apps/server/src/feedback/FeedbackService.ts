@@ -20,7 +20,7 @@ import {
   type FeedbackInput,
   type FeedbackLimitError,
   type FeedbackNotRequestedError,
-  type FeedbackOffError,
+  FeedbackOffError,
   type FeedbackReport,
   type FeedbackSource,
   FeedbackStorageError,
@@ -219,3 +219,7 @@ const make = Effect.fn("FeedbackService.make")(function* (
 
 export const layer = (mcpToolNames: () => ReadonlyArray<string>) =>
   Layer.effect(FeedbackService, make(mcpToolNames));
+
+export const layerDisabled = Layer.succeed(FeedbackService, {
+  submit: Effect.fn("FeedbackService.submit")(() => Effect.fail(new FeedbackOffError({}))),
+});

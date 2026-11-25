@@ -1,4 +1,5 @@
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as References from "effect/References";
 import type * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Socket from "effect/socket/Socket";
@@ -68,6 +69,7 @@ const layerRuntime = Layer.mergeAll(
   Dpop.layer,
   Socket.layerWebSocketConstructorGlobal,
   ClientTracer.layer,
+  Layer.succeed(References.TracerEnabled, false),
   layerRelayTracing,
   ManagedRelayLayer.layer(configuredRelayUrl()).pipe(
     Layer.provide(Layer.mergeAll(layerHttpClient, Dpop.layer)),

@@ -342,25 +342,7 @@ export const isCiEnvironment = (env: Readonly<Record<string, string | undefined>
     return value !== undefined && value !== "" && value !== "false" && value !== "0";
   });
 
-/** The cross-tool `DO_NOT_TRACK=1` convention turns off product analytics and relay tracing. */
-export const isDoNotTrackSet = (env: Readonly<Record<string, string | undefined>>) =>
-  T3CODE_TRUE.includes(env.DO_NOT_TRACK?.trim().toLowerCase() ?? "");
-
-export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
-  Config.all({
-    ...sdkFlags,
-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
-  }).pipe(
-    Effect.map(
-      ({ telemetry, t3, spec }) =>
-        (telemetry.value ?? !isCiEnvironment(env)) &&
-        !isDoNotTrackSet(env) &&
-        !(t3.value ?? spec.value ?? false),
-    ),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
-    Effect.orDie,
-    Effect.runSync,
-  );
+export const isRelayTracingEnabled = (_env: Readonly<Record<string, string | undefined>>) => false;
 
 export type SignalName = "traces" | "metrics" | "logs";
 

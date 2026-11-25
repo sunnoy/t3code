@@ -455,7 +455,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   );
   const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
-  const otel = yield* OtelEnvironment.load;
+  const otel = { ...OtelEnvironment.none, disabled: true };
 
   const signalExport: SignalExport = {
     protocol: env.otlpProtocol,
