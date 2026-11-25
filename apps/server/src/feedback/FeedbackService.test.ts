@@ -403,7 +403,7 @@ it.effect("stores nothing and fails when agent feedback is off", () =>
       const feedback = yield* Feedback.FeedbackService;
       const error = yield* Effect.flip(feedback.submit(input, fromThread));
       expect(error._tag).toBe("FeedbackOffError");
-      expect(error.message).toContain("Settings > Labs");
+      expect(error.message).toContain("disabled in this build");
       expect((yield* Effect.flip(listFeedbackReports))._tag).toBe("FeedbackOffError");
     }).pipe(Effect.provide(layer));
     expect(yield* Ref.get(events)).toEqual([]);
@@ -416,6 +416,7 @@ it.effect("scrubs the caller's private values and sends only the event contract"
     yield* Effect.gen(function* () {
       const feedback = yield* Feedback.FeedbackService;
       yield* Ref.set(telemetry, false);
+      const username = NodeOS.userInfo().username;
       const {
         stored: local,
         card,
@@ -425,7 +426,7 @@ it.effect("scrubs the caller's private values and sends only the event contract"
         {
           kind: "other",
           subject: "mcp__t3-code__t3_thread_read",
-          expected: `Reading /srv/checkouts/acme-app-7 on acme/secret-launch as ${NodeOS.userInfo().username}`,
+          expected: `Reading /srv/checkouts/acme-app-7 on acme/secret-launch as ${username}`,
           actual:
             "git@github.com:acme/payments.git in Acme Payments with sk-proj-abcdefghij1234567890",
           workaround: "x".repeat(400),
@@ -437,7 +438,7 @@ it.effect("scrubs the caller's private values and sends only the event contract"
       expect(local).toMatchObject({
         kind: "other",
         subject: "t3_thread_read",
-        expected: "Reading [redacted] on [redacted] as [redacted]",
+        expected: `Reading [redacted] on [redacted] as ${username.length >= 3 ? "[redacted]" : username}`,
         actual: "[redacted] in [redacted] with [redacted]",
         workaround: "x".repeat(300),
         userRequested: true,

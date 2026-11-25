@@ -190,4 +190,5 @@ export const make = Effect.fn("resourceTelemetry.resourceMonitorBinary.make")(fu
   return ResourceMonitorBinary.of({ resolve });
 });
 
+/** @public */
 export const layer = Layer.effect(ResourceMonitorBinary, make());

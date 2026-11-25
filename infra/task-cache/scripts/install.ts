@@ -1,4 +1,3 @@
-/* oxlint-disable t3code/no-global-process-runtime -- Standalone setup must run before workspace dependencies are installed. */
 // @effect-diagnostics nodeBuiltinImport:off - standalone bootstrap also runs before dependencies are installed.
 // @effect-diagnostics globalConsole:off globalFetch:off globalDate:off - interactive setup and endpoint verification.
 import * as NodeCrypto from "node:crypto";
@@ -155,26 +154,15 @@ if (
     "Use an HTTPS cache endpoint without embedded credentials, query, or fragment (HTTP is only allowed on loopback).",
   );
 endpoint = url.href.replace(/\/$/, "");
-const response = await fetch(`${endpoint}/telemetry`, {
+// A bodyless store passes writer authentication before failing multipart validation.
+// It cannot create an artifact and works with existing cache deployments.
+const response = await fetch(`${endpoint}/store`, {
   method: "POST",
-  headers: {
-    Authorization: `Basic ${Buffer.from(`${name}:${token}`).toString("base64")}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    id: NodeCrypto.randomBytes(32).toString("hex"),
-    recordedAt: Date.now(),
-    host: NodeOS.hostname(),
-    platform: NodeOS.platform(),
-    arch: NodeOS.arch(),
-    ci: false,
-    runId: "setup",
-    tasks: [],
-  }),
+  headers: { Authorization: `Basic ${Buffer.from(`${name}:${token}`).toString("base64")}` },
   signal: AbortSignal.timeout(10_000),
 });
 await response.body?.cancel();
-if (!response.ok)
+if (response.status !== 400)
   throw new Error(`Credential verification failed (${response.status}); nothing was installed.`);
 
 const candidates = [NodePath.join(root, "node_modules/vite-plus/dist/bin.js")];
@@ -215,8 +203,6 @@ await NodeFSP.writeFile(NodePath.join(installed, "package.json"), '{"type":"modu
 for (const file of [
   "runHook.ts",
   "remoteCache.ts",
-  "flush.ts",
-  "telemetry.ts",
   "nativeHook.js",
   "nativeRunHook.js",
   "preload.mjs",
@@ -245,6 +231,8 @@ for (const [path, { original }] of targets) {
 }
 for (const file of [
   "nativeHook.ts",
+  "flush.ts",
+  "telemetry.ts",
   "launcher-telemetry.ts",
   "launcherTelemetry.ts",
   "vp.ts",

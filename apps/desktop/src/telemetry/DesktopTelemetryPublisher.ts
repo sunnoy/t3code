@@ -23,7 +23,6 @@ import * as Stream from "effect/Stream";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
-import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 
 const LIVE_SAMPLE_INTERVAL = Duration.seconds(1);
@@ -146,7 +145,6 @@ function sampleInterval(
 export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
-  const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
   const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   yield* electronApp.whenReady;
 
@@ -207,19 +205,15 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       function* (allowSuspendRecovery: boolean) {
         const sampledAt = yield* DateTime.now;
         const sampledAtUnixMs = DateTime.toEpochMillis(sampledAt);
-        const demand = (yield* Ref.get(diagnosticsDemandSources)).size > 0;
-        const [currentPower, idleSeconds, systemIdleState, onBattery, metrics] = yield* Effect.all(
+        const [currentPower, idleSeconds, systemIdleState, onBattery] = yield* Effect.all(
           [
             Ref.get(powerState),
             powerMonitor.getSystemIdleTime,
             powerMonitor.getSystemIdleState(IDLE_THRESHOLD_SECONDS),
             powerMonitor.isOnBatteryPower,
-            electronApp.getAppMetrics,
           ],
           { concurrency: "unbounded" },
         );
-        // One Electron sampler preserves the shared CPU measurement interval.
-        yield* rendererHistory.recordMetrics(metrics);
         const polledLocked =
           systemIdleState === "unknown"
             ? currentPower.locked
@@ -274,20 +268,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
             updatedAt: sampledAt,
           },
           speedLimitPercent: observedPower.speedLimitPercent,
-          electronProcesses: (demand ? metrics : []).map((metric) => ({
-            pid: metric.pid,
-            creationTimeMs: Math.max(0, Math.round(metric.creationTime)),
-            type: metric.type,
-            ...(metric.name === undefined ? {} : { name: metric.name }),
-            ...(metric.serviceName === undefined ? {} : { serviceName: metric.serviceName }),
-            cpuPercent: metric.cpu.percentCPUUsage,
-            ...(metric.cpu.cumulativeCPUUsage === undefined
-              ? {}
-              : { cumulativeCpuSeconds: metric.cpu.cumulativeCPUUsage }),
-            idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
-            workingSetBytes: Math.max(0, Math.round(metric.memory.workingSetSize * 1024)),
-            peakWorkingSetBytes: Math.max(0, Math.round(metric.memory.peakWorkingSetSize * 1024)),
-          })),
+          electronProcesses: [],
         };
 
         yield* Ref.set(latest, Option.some(snapshot));

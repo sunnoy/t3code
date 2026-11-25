@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as References from "effect/References";
 
 import { layerRemoteHttpClient } from "@t3tools/client-runtime/rpc";
 
@@ -36,6 +37,7 @@ const layerRuntime = Layer.merge(
   Layer.provideMerge(Dpop.layer),
   Layer.provideMerge(layerHttpClient),
   Layer.provideMerge(Tracing.layer.pipe(Layer.provide(layerHttpClient))),
+  Layer.provideMerge(Layer.succeed(References.TracerEnabled, false)),
   Layer.provideMerge(Persistence.layer),
   // These layers read the keychain and the database while they build, and a
   // failed build is kept for the life of the process.

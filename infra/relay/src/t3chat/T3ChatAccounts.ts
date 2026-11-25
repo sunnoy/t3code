@@ -119,6 +119,7 @@ export const make = Effect.gen(function* () {
     return yield* Effect.tryPromise({
       try: async () => {
         const user = await createClerkClient({
+          telemetry: { disabled: true },
           secretKey: Redacted.value(config.clerkSecretKey),
           publishableKey: config.clerkPublishableKey,
         }).users.getUser(userId);

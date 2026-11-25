@@ -57,11 +57,7 @@ it.effect.each([false, true])("gates relay sends and preserves typed failures (%
     Effect.scoped,
     Effect.andThen(
       Effect.sync(() => {
-        expect(fetchFn).toHaveBeenCalledTimes(Number(enabled));
-        if (!enabled) return;
-        expect(new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array)).toContain(
-          "mobile.test.failed-span",
-        );
+        expect(fetchFn).not.toHaveBeenCalled();
       }),
     ),
   );

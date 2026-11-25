@@ -247,6 +247,7 @@ const layerWith = (
     }),
   );
 
+/** @public */
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const { serverTracePath } = yield* ServerConfig.ServerConfig;

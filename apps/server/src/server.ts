@@ -70,11 +70,8 @@ import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
-import * as ProviderUsageAnalytics from "./telemetry/ProviderUsageAnalytics.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
-import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
@@ -168,7 +165,6 @@ import * as SourceControlRepositoryService from "./sourceControl/SourceControlRe
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as Observability from "./observability/Observability.ts";
 import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
-import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -220,9 +216,8 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
-import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
-import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
+import { layer as layerNativeTelemetry } from "./resourceTelemetry/NativeTelemetryDisabled.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
@@ -265,32 +260,14 @@ const HTTP_ROUTER_CONFIG = {
 
 // Skip Effect's default 20 s grace; WebSocket scope finalizers already close connections gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
-const layerResourceAttribution = ResourceAttribution.layer;
-const layerApplicationObservability = EventLoopMonitor.layer.pipe(
-  Layer.provideMerge(Observability.layer),
+const layerResourceAttribution = ResourceAttribution.layerDisabled;
+const layerApplicationObservability = Observability.layer.pipe(
   Layer.provideMerge(layerResourceAttribution),
 );
 
-// Share rotation state so driver loggers cannot race.
-const layerProviderEventLoggers = Layer.effect(
+const layerProviderEventLoggers = Layer.succeed(
   ProviderEventLoggers.ProviderEventLoggers,
-  Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
-    const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
-      attribution,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(error.message, { error }).pipe(
-          Effect.annotateLogs({ scope: "provider-observability" }),
-          Effect.as(undefined),
-        ),
-      ),
-    );
-    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
-    yield* Effect.addFinalizer(() => store.close());
-    return { native: store.logger("native"), canonical: store.logger("canonical") };
-  }),
+  ProviderEventLoggers.NoOpProviderEventLoggers,
 );
 
 const layerPtyAdapter = NodePtyAdapter.layer;
@@ -301,9 +278,6 @@ const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerConfig),
 );
 
-const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
-  Layer.provide(ResourceMonitorBinary.layer),
-);
 const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
   Layer.provideMerge(layerServerSettings),
 );
@@ -659,7 +633,6 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(UsageLimitSources.layerResetFallback),
   Layer.provide(layerTaskFolders),
   Layer.provide(layerScheduledTaskWebhookOrigin),
-  Layer.provide(ProviderUsageAnalytics.layer),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
   Layer.provide(
@@ -747,7 +720,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   layerThreadPullRequestWorker,
   KeepAwake.layer,
-  DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -880,7 +852,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
   // Layers memoize by reference, so this is the same policy the settings layer reads.
-  Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(ManagedPolicy.layer))),
+  Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),

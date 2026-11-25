@@ -396,6 +396,7 @@ export class ProviderTurnAnalytics extends Context.Reference<{
   }),
 }) {}
 
+/** @public */
 export const layer = Layer.effect(
   ProviderTurnAnalytics,
   Effect.gen(function* () {
