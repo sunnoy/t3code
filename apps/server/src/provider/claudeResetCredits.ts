@@ -3,6 +3,7 @@ import type {
   ServerProviderResetCreditOption,
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
+import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
+import { makeHttpProxyFetch } from "../outboundHttp.ts";
 
 const API_BASE = "https://api.anthropic.com";
 const PROGRAM = "cedar_ember";
@@ -69,7 +72,9 @@ const RESET_CREDIT_FAILURES = {
   coolingDown: "Claude resets are cooling down. Try again later.",
   unconfirmed:
     "Claude could not confirm the reset. If you are still limited in a moment, try again.",
-  requestFailed: "Claude could not redeem the reset.",
+  proxyUnavailable:
+    "Claude resets require a valid HTTPS proxy in the Claude profile's settings.json.",
+  requestFailed: "Claude could not redeem the reset through the profile proxy.",
 } as const;
 
 class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>()(
@@ -91,6 +96,7 @@ const isClaudeResetCreditError = Schema.is(ClaudeResetCreditError);
 /** Retry unanswered or unconfirmed claims with the same request ID. */
 export const isSettledClaudeResetCreditFailure = (error: unknown) =>
   isClaudeResetCreditError(error) &&
+  error.reason !== "proxyUnavailable" &&
   error.reason !== "requestFailed" &&
   error.reason !== "unconfirmed";
 
@@ -207,27 +213,97 @@ const withClaudeHeaders = (token: string, version: string) =>
     "user-agent": `claude-cli/${version} (external, cli)`,
   });
 
+const decodeProxySettings = Schema.decodeUnknownEffect(
+  fromLenientJson(
+    Schema.Struct({
+      env: Schema.optional(
+        Schema.Struct({
+          https_proxy: Schema.optional(Schema.String),
+          HTTPS_PROXY: Schema.optional(Schema.String),
+          all_proxy: Schema.optional(Schema.String),
+          ALL_PROXY: Schema.optional(Schema.String),
+        }),
+      ),
+    }),
+  ),
+);
+
+const profileProxy = Effect.fn("claudeResetCredits.profileProxy")(function* (configDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { env } = yield* fs.readFileString(path.join(configDir, "settings.json")).pipe(
+    Effect.flatMap(decodeProxySettings),
+    Effect.mapError(() => new ClaudeResetCreditError({ reason: "proxyUnavailable" })),
+  );
+  for (const [lower, upper] of [
+    [env?.https_proxy?.trim(), env?.HTTPS_PROXY?.trim()],
+    [env?.all_proxy?.trim(), env?.ALL_PROXY?.trim()],
+  ]) {
+    if (!lower && !upper) continue;
+    const url = URL.parse(lower || upper || "");
+    if (
+      (lower && upper && lower !== upper) ||
+      !url ||
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      break;
+    }
+    return url;
+  }
+  return yield* new ClaudeResetCreditError({ reason: "proxyUnavailable" });
+});
+
+// Use an explicit per-request dispatcher so host proxy variables and NO_PROXY cannot reroute a claim.
+const withProfileProxy = <A, E, R>(configDir: string, request: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    profileProxy(configDir).pipe(
+      Effect.flatMap((uri) =>
+        Effect.try({
+          try: () => makeHttpProxyFetch(uri),
+          catch: () => new ClaudeResetCreditError({ reason: "proxyUnavailable" }),
+        }),
+      ),
+    ),
+    (proxy) =>
+      request.pipe(
+        Effect.provideService(FetchHttpClient.Fetch, proxy.fetch),
+        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      ),
+    (proxy) =>
+      Effect.tryPromise({
+        try: proxy.close,
+        catch: () => new ClaudeResetCreditError({ reason: "requestFailed" }),
+      }).pipe(Effect.ignore),
+  );
+
 export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
   function* (configDir: string, version: string) {
     const token = yield* readAccessToken(configDir);
     if (!token) return undefined;
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* client.execute(
-      HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
-        urlParams: { cedar_ember: "1", skip_spend: "1" },
-      }).pipe(withClaudeHeaders(token, version)),
-    );
-    const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
-      yield* HttpClientResponse.filterStatusOk(response),
-    );
-    return claudeResetCreditsToContract(
-      body.cedar_ember,
-      DateTime.toEpochMillis(yield* DateTime.now),
-    );
+    return yield* withProfileProxy(configDir, readUsage(token, version));
   },
   Effect.timeout("10 seconds"),
   Effect.orElseSucceed(() => undefined),
 );
+
+const readUsage = Effect.fnUntraced(function* (token: string, version: string) {
+  const client = yield* HttpClient.HttpClient;
+  const response = yield* client.execute(
+    HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
+      urlParams: { cedar_ember: "1", skip_spend: "1" },
+    }).pipe(withClaudeHeaders(token, version)),
+  );
+  const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
+    yield* HttpClientResponse.filterStatusOk(response),
+  );
+  return claudeResetCreditsToContract(
+    body.cedar_ember,
+    DateTime.toEpochMillis(yield* DateTime.now),
+  );
+});
 
 export const readClaudeOauthAccount = (accountConfigPath: string) =>
   readJson(Config, accountConfigPath).pipe(
@@ -277,6 +353,14 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   if (!token || !organization) {
     return yield* new ClaudeResetCreditError({ reason: "signedOut" });
   }
+  return yield* withProfileProxy(input.configDir, redeemGrant(input, token, organization));
+});
+
+const redeemGrant = Effect.fnUntraced(function* (
+  input: { readonly version: string; readonly grantId: string; readonly requestId: string },
+  token: string,
+  organization: string,
+) {
   const client = yield* HttpClient.HttpClient;
   const response = yield* client
     .execute(
@@ -296,7 +380,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
     )
     .pipe(
       Effect.timeout("25 seconds"),
-      Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
+      Effect.mapError(() => new ClaudeResetCreditError({ reason: "requestFailed" })),
     );
   if (response.status === 429) {
     return yield* new ClaudeResetCreditError({ reason: "rateLimited" });
@@ -307,7 +391,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(ClaimResponse)),
     Effect.timeout("25 seconds"),
-    Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
+    Effect.mapError(() => new ClaudeResetCreditError({ reason: "requestFailed" })),
   );
   if (body.result === "cooldown") {
     return yield* new ClaudeResetCreditError({ reason: "coolingDown" });

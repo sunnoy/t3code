@@ -6,6 +6,22 @@ import type * as Undici from "undici";
 // undici is external to the CLI bundle; Node single-executables can load it from disk only with require.
 const requireUndici = NodeModule.createRequire(import.meta.url);
 
+export function makeHttpProxyFetch(uri: URL) {
+  const undici = requireUndici("undici") as typeof Undici;
+  const dispatcher = new undici.ProxyAgent({
+    uri: uri.toString(),
+    allowH2: false,
+    clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
+  });
+  // The proxy agent and fetch must come from the same Undici version.
+  const fetchThroughProxy: typeof undici.fetch = (input, init) =>
+    undici.fetch(input, { ...init, dispatcher, redirect: "error" });
+  return {
+    fetch: fetchThroughProxy as typeof globalThis.fetch,
+    close: () => dispatcher.destroy(),
+  };
+}
+
 /** Node 26 bundles h2-capable undici 8; Node 22/24 and Electron stay on HTTP/1.1 with 6/7. */
 export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) =>
   Number.parseInt(bundledUndiciVersion ?? "", 10) >= 8;
