@@ -34,6 +34,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -43,7 +44,11 @@ import {
   normalizeDesktopUpdateReleaseNotes,
   releaseNotesOfOfferedVersion,
 } from "./releaseNotes.ts";
-import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
+import {
+  CLI_RELEASE_REPOSITORY,
+  CLI_RELEASES_PAGE_URL,
+  desktopUpdateChannelOf,
+} from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   createInitialDesktopUpdateState,
@@ -392,6 +397,7 @@ export const make = Effect.gen(function* () {
   const desktopState = yield* DesktopState.DesktopState;
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const shell = yield* ElectronShell.ElectronShell;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -400,6 +406,11 @@ export const make = Effect.gen(function* () {
   const mockUpdates = config.mockUpdates && policy.message === null;
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
+  const manualDownload = Ref.get(appUpdateYmlConfigRef).pipe(
+    Effect.map((config) =>
+      Option.exists(config, (feed) => `${feed.owner}/${feed.repo}` === CLI_RELEASE_REPOSITORY),
+    ),
+  );
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
   const installRunningBackendsRef = yield* Ref.make<
     ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>
@@ -835,9 +846,10 @@ export const make = Effect.gen(function* () {
   );
 
   const baseUpdateState = (channel: DesktopUpdateChannel, disabledReason: Option.Option<string>) =>
-    Ref.get(notAppliedVersionRef).pipe(
-      Effect.map((notAppliedVersion) => ({
+    Effect.all([Ref.get(notAppliedVersionRef), manualDownload]).pipe(
+      Effect.map(([notAppliedVersion, manual]) => ({
         ...createBaseUpdateState(channel, disabledReason, environment),
+        ...(manual ? { manualDownload: true as const } : {}),
         // Callers fall back to the channel's reason only when nothing else turns updates off.
         ...(Option.isSome(disabledReason) &&
         disabledReason.value === Option.getOrUndefined(channelBlockedReason(channel))
@@ -1017,7 +1029,7 @@ export const make = Effect.gen(function* () {
   const installWithExpectedVersion = Effect.fn("desktop.updates.install")(function* (
     expectedVersion?: string,
   ) {
-    if (yield* Ref.get(desktopState.quitting)) {
+    if ((yield* manualDownload) || (yield* Ref.get(desktopState.quitting))) {
       return {
         accepted: false,
         completed: false,
@@ -1356,7 +1368,10 @@ export const make = Effect.gen(function* () {
       const settings = yield* desktopSettings.get;
       const disabledReason = yield* resolveDisabledReason;
       // A blocked nightly channel still lets the user switch back to stable, so it stays updatable.
-      yield* Ref.set(desktopState.canInstallUpdates, Option.isNone(disabledReason));
+      yield* Ref.set(
+        desktopState.canInstallUpdates,
+        Option.isNone(disabledReason) && !(yield* manualDownload),
+      );
       yield* setState(
         yield* baseUpdateState(
           settings.updateChannel,
@@ -1491,6 +1506,16 @@ export const make = Effect.gen(function* () {
       };
     }),
     download: Effect.gen(function* () {
+      const state = yield* Ref.get(updateStateRef);
+      if (state.manualDownload) {
+        const opened =
+          state.enabled && state.availableVersion !== null
+            ? yield* shell.openExternal(
+                `${CLI_RELEASES_PAGE_URL}/tag/v${encodeURIComponent(state.availableVersion)}`,
+              )
+            : false;
+        return { accepted: opened, completed: false, state };
+      }
       const result = yield* downloadAvailableUpdate(true);
       return {
         accepted: result.accepted,
