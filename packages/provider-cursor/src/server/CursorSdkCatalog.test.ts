@@ -2,22 +2,13 @@ import type { SDKModel, SDKUser } from "@cursor/sdk";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { vi } from "vite-plus/test";
-
-const sdkLoad = vi.hoisted(() =>
-  vi.fn(() => {
-    throw new Error("Catalog must not load the SDK");
-  }),
-);
-vi.mock("./sdk.ts", () => ({ loadCursorSdk: sdkLoad, isCursorSdkError: () => false }));
-
 import * as CursorSdkCatalog from "./CursorSdkCatalog.ts";
+import * as CursorSdk from "./CursorSdk.ts";
+import { loadCursorSdk, loadCursorSqlite } from "./sdk.ts";
 
 const user = {
   apiKeyName: "test-key",
@@ -38,92 +29,39 @@ const catalogError = () =>
   });
 
 describe("CursorSdkCatalog", () => {
-  it.effect.each([
-    { route: "me", status: 200, body: user, expected: "ready" },
-    {
-      route: "me",
-      status: 401,
-      body: { error: { code: "feature_unavailable" } },
-      expected: "unauthenticated",
-    },
-    {
-      route: "me",
-      status: 403,
-      body: { error: { code: "feature_unavailable" } },
-      expected: "no-user",
-    },
-    { route: "me", status: 403, body: "Forbidden", expected: "no-user" },
-    { route: "me", status: 403, body: { code: "plan_required" }, expected: "plan" },
-    { route: "models", status: 403, body: { error: { code: "plan_required" } }, expected: "plan" },
-    { route: "models", status: 403, body: {}, expected: "blocked" },
-    { route: "me", status: 503, body: "Unavailable", expected: "error" },
-    { route: "models", status: 200, body: { items: [{ id: "missing-name" }] }, expected: "error" },
-    { route: "me", status: 200, body: "invalid JSON", expected: "error" },
-  ])(
-    "reads $route HTTP $status as $expected without loading the SDK",
-    ({ route, status, body, expected }) =>
-      Effect.gen(function* () {
-        sdkLoad.mockClear();
-        const requests: Array<string> = [];
-        const models = [
-          {
-            ...model,
-            aliases: ["opus"],
-            parameters: [{ id: "fast", values: [{ value: "true" }] }],
-            variants: [
-              {
-                displayName: "Fast",
-                params: [{ id: "fast", value: "true" }],
-                isDefault: true,
-                isMaxMode: true,
-              },
-            ],
-          },
-        ];
-        const client = HttpClient.make((request) => {
-          expect(request.headers.authorization).toBe("Bearer test-key");
-          expect(request.method).toBe("GET");
-          requests.push(request.url);
-          const matches = request.url === `https://api.cursor.com/v1/${route}`;
-          const responseBody = matches
-            ? body
-            : request.url.endsWith("/me")
-              ? user
-              : { items: models };
-          const response =
-            typeof responseBody === "string"
-              ? new Response(responseBody, { status: matches ? status : 200 })
-              : Response.json(responseBody, { status: matches ? status : 200 });
-          return Effect.succeed(HttpClientResponse.fromWeb(request, response));
-        });
-        const catalog = yield* CursorSdkCatalog.CursorSdkCatalog.pipe(
-          Effect.provide(
-            CursorSdkCatalog.layer.pipe(
-              Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+  it.effect("gets the user and models through the Cursor SDK", () =>
+    Effect.gen(function* () {
+      const keys: Array<string | undefined> = [];
+      const { Cursor } = loadCursorSdk();
+      const me = vi.spyOn(Cursor, "me").mockImplementation(async (options) => {
+        keys.push(options?.apiKey);
+        return user;
+      });
+      const models = vi.spyOn(Cursor.models, "list").mockImplementation(async (options) => {
+        keys.push(options?.apiKey);
+        return [model];
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          me.mockRestore();
+          models.mockRestore();
+        }),
+      );
+      const catalog = yield* CursorSdkCatalog.CursorSdkCatalog.pipe(
+        Effect.provide(
+          CursorSdkCatalog.layer.pipe(
+            Layer.provide(
+              Layer.succeed(CursorSdk.CursorSdk, {
+                load: loadCursorSdk,
+                loadSqlite: loadCursorSqlite,
+              }),
             ),
           ),
-        );
-        expect(sdkLoad).not.toHaveBeenCalled();
-        const result = yield* catalog.read("test-key").pipe(Effect.exit);
-        expect(requests).toContain(`https://api.cursor.com/v1/${route}`);
-        if (expected === "ready" || expected === "no-user") {
-          expect(Exit.isSuccess(result)).toBe(true);
-          if (Exit.isSuccess(result))
-            expect(result.value).toEqual({
-              user: expected === "no-user" ? undefined : user,
-              models,
-            });
-        } else {
-          expect(Exit.isFailure(result)).toBe(true);
-          if (Exit.isFailure(result))
-            expect(Cause.squash(result.cause)).toMatchObject({
-              authenticationFailure: expected === "unauthenticated",
-              planRequired: expected === "plan",
-              accountBlocked: expected === "blocked",
-            });
-        }
-        expect(sdkLoad).not.toHaveBeenCalled();
-      }),
+        ),
+      );
+      expect(yield* catalog.read("instance-key")).toEqual({ user, models: [model] });
+      expect(keys).toEqual(["instance-key", "instance-key"]);
+    }),
   );
 
   it.effect("shares concurrent first model discovery until the response arrives", () =>

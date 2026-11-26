@@ -55,7 +55,6 @@ import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
 import * as SpeechModelStore from "./speech/SpeechModelStore.ts";
 import * as SpeechService from "./speech/SpeechService.ts";
-import * as CloudSpeech from "./speech/CloudSpeech.ts";
 import { speechHttpApiLayer } from "./speech/http.ts";
 import { speechStreamRouteLayer } from "./speech/stream.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
@@ -171,7 +170,6 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
-import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
 import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
@@ -222,8 +220,6 @@ import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
-import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
-import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
@@ -303,12 +299,9 @@ const layerBackground = BackgroundPolicy.layer.pipe(
 
 const layerUsage = UsageService.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(
-      AntigravityUsage.layer,
-      MuseUsageHome.layer,
-      CodexUsageHistory.layer,
-      CursorUsageAccounts.layer.pipe(Layer.provide(CursorAccountReader.layer)),
-    ).pipe(Layer.provide(ProviderHostLive.layer.pipe(Layer.provide(ServerSecretStore.layer)))),
+    Layer.mergeAll(AntigravityUsage.layer, MuseUsageHome.layer, CodexUsageHistory.layer).pipe(
+      Layer.provide(ProviderHostLive.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    ),
   ),
   Layer.provide(layerServerSettings),
 );
@@ -822,7 +815,6 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
-  Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(
@@ -938,7 +930,6 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(SpeechModelStore.layer),
     ),
   ),
-  Layer.provide(CloudSpeech.layer.pipe(Layer.provide(SecretResolver.layer))),
   Layer.provide(layerServerSettings),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),

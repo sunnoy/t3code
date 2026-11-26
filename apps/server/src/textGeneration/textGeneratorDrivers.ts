@@ -11,7 +11,6 @@ import {
 /** Where a text generator is reached, with its key already read from wherever settings keep it. */
 export interface TextGeneratorConnection {
   readonly baseUrl: string;
-  readonly apiKey: string;
   /** Names the generator in errors, such as its label or host. */
   readonly label: string;
 }
@@ -71,7 +70,7 @@ const sendJson = Effect.fn("TextGenerator.sendJson")(function* <S extends Schema
 ) {
   const http = yield* HttpClient.HttpClient;
   const response: HttpClientResponse.HttpClientResponse = yield* http.execute(request).pipe(
-    // A redirect could carry the key to another origin.
+    // The configured endpoint owns the supplied prompt.
     Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
     Effect.provideService(HttpClient.TracerPropagationEnabled, false),
     Effect.mapError(
@@ -139,10 +138,9 @@ const openAICompatible: TextGeneratorDriver = {
   kind: "openaiCompatible",
   generate: (connection, model, prompt) => {
     const { label } = connection;
-    let request = HttpClientRequest.post(endpoint(connection, "/chat/completions")).pipe(
+    const request = HttpClientRequest.post(endpoint(connection, "/chat/completions")).pipe(
       HttpClientRequest.bodyJsonUnsafe({ model, messages: [{ role: "user", content: prompt }] }),
     );
-    if (connection.apiKey) request = HttpClientRequest.bearerToken(request, connection.apiKey);
     return sendJson(label, request, ChatCompletion).pipe(
       Effect.flatMap((completion) => {
         const choice = completion.choices[0];
@@ -161,8 +159,7 @@ const openAICompatible: TextGeneratorDriver = {
   },
   listModels: (connection) => {
     const { label } = connection;
-    let request = HttpClientRequest.get(endpoint(connection, "/models"));
-    if (connection.apiKey) request = HttpClientRequest.bearerToken(request, connection.apiKey);
+    const request = HttpClientRequest.get(endpoint(connection, "/models"));
     return sendJson(label, request, OpenAIModelList).pipe(
       Effect.map((list) => sortModels(list.data.flatMap((entry) => readModel(entry) ?? []))),
       withTimeout(label, LIST_MODELS_TIMEOUT),
@@ -185,11 +182,7 @@ const AnthropicModelPage = Schema.Struct({
   last_id: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const anthropicRequest = (request: HttpClientRequest.HttpClientRequest, apiKey: string) =>
-  request.pipe(
-    HttpClientRequest.setHeader("x-api-key", apiKey),
-    HttpClientRequest.setHeader("anthropic-version", ANTHROPIC_VERSION),
-  );
+const anthropicRequest = HttpClientRequest.setHeader("anthropic-version", ANTHROPIC_VERSION);
 
 const anthropic: TextGeneratorDriver = {
   kind: "anthropic",
@@ -203,7 +196,6 @@ const anthropic: TextGeneratorDriver = {
           messages: [{ role: "user", content: prompt }],
         }),
       ),
-      connection.apiKey,
     );
     return sendJson(label, request, AnthropicMessage).pipe(
       Effect.flatMap((message) => {
@@ -233,11 +225,7 @@ const anthropic: TextGeneratorDriver = {
           HttpClientRequest.setUrlParam("limit", "1000"),
         );
         if (after) request = HttpClientRequest.setUrlParam(request, "after_id", after);
-        const result = yield* sendJson(
-          label,
-          anthropicRequest(request, connection.apiKey),
-          AnthropicModelPage,
-        );
+        const result = yield* sendJson(label, anthropicRequest(request), AnthropicModelPage);
         for (const entry of result.data) {
           const model = readModel({ id: entry.id, name: entry.display_name });
           if (model) models.set(model.id, model);

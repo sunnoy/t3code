@@ -208,7 +208,7 @@ function codexAccountAuthLabel(
   return usageLabel ?? codexPlanLabel(account.planType);
 }
 
-export function codexPlanLabel(planType: string | null | undefined): string | undefined {
+function codexPlanLabel(planType: string | null | undefined): string | undefined {
   switch (planType) {
     case "free":
       return "ChatGPT Free Subscription";
@@ -864,21 +864,6 @@ const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
   ),
 );
 
-export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(function* (input: {
-  readonly binaryPath: string;
-  readonly homePath?: string;
-  readonly launchArgs?: string;
-  readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv;
-}) {
-  const { client } = yield* withCodexAppServerClient({
-    ...input,
-    environment: providerProbeEnvironment(input.environment ?? process.env),
-  });
-  const skillsResponse = yield* client.request("skills/list", { cwds: [input.cwd] });
-  return parseCodexSkillsListResponse(skillsResponse, input.cwd);
-});
-
 // Long enough for a burst of workspace switches; short because the helper holds the user's
 // binary open, and Windows refuses to overwrite or delete a running executable.
 const CODEX_SKILLS_HELPER_IDLE_TTL = "30 seconds";
@@ -1190,3 +1175,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 });
 
 export { makePendingCodexProvider };
+
+export interface CodexEffectiveRuntime {
+  readonly config: CodexSettings;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly revision: string;
+}

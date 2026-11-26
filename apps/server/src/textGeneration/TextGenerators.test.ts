@@ -1,7 +1,6 @@
 import { it } from "@effect/vitest";
 import {
   type ManagedPolicySummary,
-  ProviderDriverKind,
   ProviderInstanceId,
   type TextGeneratorConfig,
 } from "@t3tools/contracts";
@@ -13,7 +12,6 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { expect, vi } from "vite-plus/test";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { SECRET_REDACTED } from "../settingsSecrets.ts";
 import * as TextGenerators from "./TextGenerators.ts";
 
 const ID = ProviderInstanceId.make("router");
@@ -46,13 +44,11 @@ it.effect.each([
   {
     kind: "openaiCompatible",
     path: "/v1/chat/completions",
-    auth: ["authorization", "Bearer secret"],
     reply: { choices: [{ finish_reason: "stop", message: { content: '{"title":"Fix login"}' } }] },
   },
   {
     kind: "anthropic",
     path: "/v1/messages",
-    auth: ["x-api-key", "secret"],
     reply: { stop_reason: "end_turn", content: [{ type: "text", text: '{"title":"Fix login"}' }] },
   },
 ] as const)("$kind generates structured text with its API's request shape", (api) =>
@@ -60,14 +56,15 @@ it.effect.each([
     const upstream = vi.fn<typeof fetch>(async (url, init) => {
       expect(new URL(String(url)).pathname).toBe(api.path);
       expect(init?.redirect).toBe("error");
-      expect(new Headers(init?.headers).get(api.auth[0])).toBe(api.auth[1]);
+      expect(new Headers(init?.headers).get("authorization")).toBeNull();
+      expect(new Headers(init?.headers).get("x-api-key")).toBeNull();
       const body = JSON.parse(String(init?.body));
       expect(body.model).toBe("some/model");
       expect(body.messages).toEqual([{ role: "user", content: "Name this thread." }]);
       return Response.json(api.reply);
     });
     const generators = yield* TextGenerators.TextGenerators.pipe(
-      Effect.provide(layer({ kind: api.kind, apiKey: "secret" })),
+      Effect.provide(layer({ kind: api.kind })),
     );
     const run = yield* generators.runner(ID);
     expect(run).toBeDefined();
@@ -138,7 +135,8 @@ it.effect("lists models once per config, following Anthropic pagination, until r
           [ID]: {
             kind: "anthropic",
             baseUrl: "https://api.test/v1",
-            apiKey: "rotated",
+            apiKey: "",
+            label: "Updated label",
             enabled: true,
           },
         },
@@ -146,93 +144,27 @@ it.effect("lists models once per config, following Anthropic pagination, until r
       yield* list();
       expect(upstream).toHaveBeenCalledTimes(6);
     });
-    yield* program.pipe(Effect.provide(layer({ kind: "anthropic", apiKey: "secret" })));
+    yield* program.pipe(Effect.provide(layer({ kind: "anthropic" })));
   }),
 );
 
-it.effect("checks unsaved settings, keeping the saved key behind a redaction marker", () =>
+it.effect("rejects authenticated model APIs before sending a request", () =>
   Effect.gen(function* () {
-    const seen: Array<{ url: string; auth: string | null }> = [];
-    const upstream = vi.fn<typeof fetch>(async (url, init) => {
-      seen.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
-      return String(url).endsWith("/chat/completions")
-        ? Response.json({
-            model: JSON.parse(String(init?.body)).model,
-            choices: [{ finish_reason: "stop", message: { content: "OK" } }],
-          })
-        : Response.json({ data: [{ id: "model-a" }] });
-    });
+    const upstream = vi.fn<typeof fetch>();
     const generators = yield* TextGenerators.TextGenerators.pipe(
       Effect.provide(layer({ apiKey: "saved-key" })),
     );
-    const list = (id: string, config: Partial<TextGeneratorConfig>) =>
-      generators
-        .listModels({
-          id: ProviderInstanceId.make(id),
-          config: {
-            kind: "openaiCompatible",
-            baseUrl: "https://new.test/v1",
-            apiKey: "",
-            enabled: true,
-            ...config,
-          },
-        })
-        .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
-
-    expect((yield* list("draft", { apiKey: "typed-key" })).models).toEqual([
-      { id: "model-a", name: "model-a" },
-    ]);
-    yield* list(ID, { apiKey: SECRET_REDACTED, baseUrl: "https://api.test/v1" });
-    // The saved key goes only to the endpoint it was saved for.
-    yield* list(ID, { apiKey: SECRET_REDACTED });
-    expect(seen).toEqual([
-      { url: "https://new.test/v1/models", auth: "Bearer typed-key" },
-      { url: "https://api.test/v1/models", auth: "Bearer saved-key" },
-      { url: "https://new.test/v1/models", auth: null },
-    ]);
-
-    // Listing alone proves nothing about the key on some APIs; a test asks the model itself.
-    const tested = yield* generators
-      .listModels({ id: ID, test: true, model: "chosen/model" })
-      .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream));
-    expect(tested.testedModel).toBe("chosen/model");
-    expect(seen.at(-1)).toEqual({
-      url: "https://api.test/v1/chat/completions",
-      auth: "Bearer saved-key",
-    });
-
-    // An allow-list names agent drivers only, so no unsaved config may reach an API either.
-    const managed = yield* TextGenerators.TextGenerators.pipe(
-      Effect.provide(
-        layer(
-          { apiKey: "saved-key" },
-          {
-            organization: "Example Corp",
-            lockedSettings: [],
-            limits: {
-              providers: {
-                allowedDrivers: [ProviderDriverKind.make("codex")],
-                lockedInstanceFields: {},
-              },
-            },
-          },
-        ),
-      ),
+    const run = yield* generators.runner(ID);
+    const generation = yield* Effect.flip(
+      run!(request).pipe(Effect.provideService(FetchHttpClient.Fetch, upstream)),
     );
-    const requestsBefore = seen.length;
-    const refused = yield* managed
-      .listModels({
-        id: ProviderInstanceId.make("draft"),
-        config: {
-          kind: "openaiCompatible",
-          baseUrl: "https://new.test/v1",
-          apiKey: "k",
-          enabled: true,
-        },
-        test: true,
-      })
-      .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream), Effect.flip);
-    expect(refused.detail).toContain("policy");
-    expect(seen).toHaveLength(requestsBefore);
+    const listing = yield* Effect.flip(
+      generators
+        .listModels({ id: ID, refresh: true })
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream)),
+    );
+    expect(generation.detail).toBe("Use a provider instance for authenticated text generation.");
+    expect(listing.detail).toBe(generation.detail);
+    expect(upstream).not.toHaveBeenCalled();
   }),
 );

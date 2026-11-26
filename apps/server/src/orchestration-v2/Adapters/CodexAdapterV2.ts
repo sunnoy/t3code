@@ -16,7 +16,7 @@ import {
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
-import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
+import type { CodexEffectiveRuntime } from "../../provider/CodexProvider.ts";
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
   buildCodexInitializeParams,

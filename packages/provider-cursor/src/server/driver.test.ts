@@ -21,9 +21,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { vi } from "vite-plus/test";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as Deferred from "effect/Deferred";
 
 import {
   DEFAULT_HANDOFF_TOKEN_CAP,
@@ -57,12 +54,6 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
       ProviderEventLoggers.NoOpProviderEventLoggers,
     ),
   ),
-  Layer.provideMerge(
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() => Effect.die("Disabled Cursor must not make an HTTP request")),
-    ),
-  ),
 );
 
 it.layer(layerTest)("CursorDriver", (it) => {
@@ -82,27 +73,19 @@ it.layer(layerTest)("CursorDriver", (it) => {
           });
           return { apiKey: "instance-browser-key", apiKeyExpiresAtMs: 4_000_000_000_000 };
         });
-        const requests: Array<{ url: string; authorization: string | undefined }> = [];
-        const client = HttpClient.make((request) => {
-          requests.push({ url: request.url, authorization: request.headers.authorization });
-          return Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              Response.json(
-                request.url.endsWith("/v1/me")
-                  ? {
-                      apiKeyName: "T3 Code",
-                      createdAt: "2026-01-01T00:00:00.000Z",
-                      userEmail: "cursor@example.com",
-                    }
-                  : { items: [{ id: "auto", displayName: "Auto" }] },
-              ),
-            ),
-          );
+        const me = vi.spyOn(Cursor, "me").mockResolvedValue({
+          apiKeyName: "T3 Code",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          userEmail: "cursor@example.com",
         });
+        const catalog = vi
+          .spyOn(Cursor.models, "list")
+          .mockResolvedValue([{ id: "auto", displayName: "Auto", parameters: [] }]);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             login.mockRestore();
+            me.mockRestore();
+            catalog.mockRestore();
           }),
         );
         const input = {
@@ -115,7 +98,6 @@ it.layer(layerTest)("CursorDriver", (it) => {
         const openedKeys: Array<string | undefined> = [];
         let closed = 0;
         const instance = yield* CursorDriver.create(input).pipe(
-          Effect.provideService(HttpClient.HttpClient, client),
           Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
             assertComplete: Effect.void,
             open: (request) =>
@@ -139,10 +121,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
           Stream.runHead,
           Effect.map(Option.getOrThrow),
         );
-        expect(requests).toContainEqual({
-          url: "https://api.cursor.com/v1/me",
-          authorization: "Bearer instance-browser-key",
-        });
+        expect(me).toHaveBeenCalledWith({ apiKey: "instance-browser-key" });
         expect(yield* instance.snapshot.getSnapshot).toMatchObject({
           status: "ready",
           auth: {
@@ -169,9 +148,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
         yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
         expect(openedKeys).toEqual(["instance-browser-key"]);
         expect(closed).toBe(0);
-        const recreated = yield* CursorDriver.create(input).pipe(
-          Effect.provideService(HttpClient.HttpClient, client),
-        );
+        const recreated = yield* CursorDriver.create(input);
         expect((yield* recreated.snapshot.refresh).auth.status).toBe("authenticated");
         yield* instance.auth!.logout(Effect.void);
         expect(closed).toBe(1);
@@ -190,24 +167,21 @@ it.layer(layerTest)("CursorDriver", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-window-" });
-      const catalog = yield* Deferred.make<Array<SDKModel>>();
-      const catalogRequested = yield* Deferred.make<void>();
+      const catalog = Promise.withResolvers<Array<SDKModel>>();
+      const catalogRequested = Promise.withResolvers<void>();
       let failUser = false;
-      const client = HttpClient.make((request) =>
-        Effect.gen(function* () {
-          if (request.url.endsWith("/v1/me"))
-            return HttpClientResponse.fromWeb(
-              request,
-              Response.json(
-                failUser
-                  ? { error: { message: "Cursor is unreachable" } }
-                  : { apiKeyName: "T3 Code", createdAt: "2026-01-01T00:00:00.000Z" },
-                { status: failUser ? 503 : 200 },
-              ),
-            );
-          yield* Deferred.succeed(catalogRequested, undefined);
-          const models = yield* Deferred.await(catalog);
-          return HttpClientResponse.fromWeb(request, Response.json({ items: models }));
+      const me = vi.spyOn(Cursor, "me").mockImplementation(async () => {
+        if (failUser) throw new Error("Cursor is unreachable");
+        return { apiKeyName: "T3 Code", createdAt: "2026-01-01T00:00:00.000Z" };
+      });
+      const modelList = vi.spyOn(Cursor.models, "list").mockImplementation(() => {
+        catalogRequested.resolve();
+        return catalog.promise;
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          me.mockRestore();
+          modelList.mockRestore();
         }),
       );
       const instanceId = ProviderInstanceId.make("cursor-catalog-window");
@@ -220,7 +194,6 @@ it.layer(layerTest)("CursorDriver", (it) => {
         environment: [{ name: "CURSOR_API_KEY", value: "catalog-window-key", sensitive: true }],
         config: CursorDriver.defaultConfig(),
       }).pipe(
-        Effect.provideService(HttpClient.HttpClient, client),
         Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
           assertComplete: Effect.void,
           open: (request) =>
@@ -271,7 +244,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
         runtimePolicy,
       });
       const refresh = yield* instance.snapshot.refresh.pipe(Effect.forkScoped);
-      yield* Deferred.await(catalogRequested);
+      yield* Effect.promise(() => catalogRequested.promise);
       expect(runtime.getModelContextWindow?.(selection())).toBeUndefined();
       const providerThread = yield* runtime.ensureThread({
         threadId,
@@ -342,7 +315,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
         };
       });
       const beforeCatalog = yield* startTurn("1m");
-      yield* Deferred.succeed(catalog, [
+      catalog.resolve([
         {
           id: "claude-opus-5-5",
           displayName: "Claude Opus 5.5",

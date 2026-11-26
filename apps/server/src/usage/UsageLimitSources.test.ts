@@ -1,21 +1,15 @@
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
-  SecretProviderId,
   ServerConfigStreamEvent,
   UsageLimitSourceId,
   type ServerProviderUsageWindow,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
-import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -52,16 +46,13 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         payload: { sources: snapshots },
       }),
     ).not.toThrow();
-    expect(snapshots.every((source) => source.error === "No management key configured.")).toBe(
-      true,
-    );
+    expect(
+      snapshots.every(
+        (source) => source.error === "Authenticated quota sources are disabled in this build.",
+      ),
+    ).toBe(true);
   }).pipe(
     Effect.provide([
-      Layer.succeed(SecretResolver.SecretResolver, {
-        label: (provider) => Effect.succeed(provider),
-        read: (references) => Effect.succeed(references.map(() => undefined)),
-        invalidate: () => Effect.void,
-      }),
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("local-hub")]: {
@@ -104,7 +95,6 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.HttpClient,
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
-      NodeCrypto.layer,
     ]),
   ),
 );
@@ -119,7 +109,7 @@ it.effect("publishes validated HTTP quotas as display-only accounts", () => {
   const client = HttpClient.make((request, url) =>
     Effect.sync(() => {
       expect(url.href).toBe("https://quota.test/v1");
-      expect(request.headers.authorization).toBe("Bearer test-token");
+      expect(request.headers.authorization).toBeUndefined();
       return HttpClientResponse.fromWeb(
         request,
         new Response(
@@ -161,17 +151,12 @@ it.effect("publishes validated HTTP quotas as display-only accounts", () => {
     });
   }).pipe(
     Effect.provide([
-      Layer.succeed(SecretResolver.SecretResolver, {
-        label: (provider) => Effect.succeed(provider),
-        read: (references) => Effect.succeed(references.map(() => undefined)),
-        invalidate: () => Effect.void,
-      }),
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("quota")]: {
             kind: "http",
             url: "https://quota.test/v1",
-            managementKey: "test-token",
+            managementKey: "",
             enabled: true,
           },
         },
@@ -180,174 +165,6 @@ it.effect("publishes validated HTTP quotas as display-only accounts", () => {
         shouldRunScopeWork: () => Effect.succeed(false),
       }),
       Layer.succeed(HttpClient.HttpClient, client),
-      NodeCrypto.layer,
-    ]),
-  );
-});
-
-it.effect("reads a management key from its secret provider", () => {
-  const authorizations: Array<string | undefined> = [];
-  const keySource = (reference: string) => ({
-    provider: SecretProviderId.make("homelab"),
-    reference,
-  });
-  return Effect.gen(function* () {
-    const sources = yield* UsageLimitSources.make;
-    const snapshots = yield* sources.streamChanges.pipe(
-      Stream.filter((next) => next.length > 0),
-      Stream.runHead,
-      Effect.flatMap(Effect.fromOption),
-    );
-    expect(snapshots.map(({ id, error }) => ({ id, error }))).toEqual([
-      { id: "resolved-hub", error: undefined },
-      {
-        id: "unresolved-hub",
-        error: "Could not read the management key from its secret provider.",
-      },
-    ]);
-    expect(authorizations).toEqual(["Bearer resolved-key"]);
-  }).pipe(
-    Effect.provide([
-      ServerSettings.layerTest({
-        usageLimitSources: {
-          [UsageLimitSourceId.make("resolved-hub")]: {
-            kind: "cliproxy",
-            url: "https://resolved.test",
-            managementKey: keySource("cliproxy#key"),
-            enabled: true,
-          },
-          [UsageLimitSourceId.make("unresolved-hub")]: {
-            kind: "cliproxy",
-            url: "https://unresolved.test",
-            managementKey: keySource("missing#key"),
-            enabled: true,
-          },
-        },
-      }),
-      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-        shouldRunScopeWork: () => Effect.succeed(false),
-      }),
-      Layer.succeed(SecretResolver.SecretResolver, {
-        label: (provider) => Effect.succeed(provider),
-        read: (references) =>
-          Effect.succeed(
-            references.map((reference) =>
-              reference.reference === "cliproxy#key" ? "resolved-key" : undefined,
-            ),
-          ),
-        invalidate: () => Effect.void,
-      }),
-      Layer.succeed(
-        HttpClient.HttpClient,
-        HttpClient.make((request) =>
-          Effect.sync(() => {
-            authorizations.push(request.headers.authorization);
-            return HttpClientResponse.fromWeb(request, Response.json({ files: [] }));
-          }),
-        ),
-      ),
-      NodeCrypto.layer,
-    ]),
-  );
-});
-
-it.effect("keeps an account's last good reading when the hub's next read of it is refused", () => {
-  let refused = true;
-  let workspace = "account-a";
-  let listsIdentity = true;
-  const readAccount = Effect.gen(function* () {
-    const sources = yield* UsageLimitSources.make;
-    return Effect.gen(function* () {
-      yield* sources.refresh;
-      const [source] = yield* sources.current;
-      return source?.accounts[0]?.usageLimits;
-    });
-  });
-  return Effect.gen(function* () {
-    const read = yield* readAccount;
-    // Nothing to keep yet: the account stays listed as unreadable.
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
-    refused = false;
-    const good = yield* read;
-    expect(good?.windows.map((window) => window.usedPercent)).toEqual([78]);
-    expect(good?.unavailable).toBeUndefined();
-    refused = true;
-    expect(yield* read).toEqual(good);
-    // The same auth file now holds another login, whose reading is unknown.
-    workspace = "account-b";
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
-    // A file that lists no login cannot show whether the next one is the same.
-    listsIdentity = false;
-    refused = false;
-    yield* read;
-    refused = true;
-    expect(yield* read).toMatchObject({ windows: [], unavailable: { reason: "probeFailed" } });
-  }).pipe(
-    Effect.provide([
-      ServerSettings.layerTest({
-        usageLimitSources: {
-          [UsageLimitSourceId.make("hub")]: {
-            kind: "cliproxy",
-            url: "http://hub.test:8317",
-            managementKey: "management-secret",
-            enabled: true,
-          },
-        },
-      }),
-      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-        shouldRunScopeWork: () => Effect.succeed(false),
-      }),
-      Layer.succeed(SecretResolver.SecretResolver, {
-        label: (provider) => Effect.succeed(provider),
-        read: (references) => Effect.succeed(references.map(() => undefined)),
-        invalidate: () => Effect.void,
-      }),
-      Layer.succeed(
-        HttpClient.HttpClient,
-        HttpClient.make((request) =>
-          Effect.sync(() => {
-            if (new URL(request.url).pathname.endsWith("/auth-files")) {
-              return HttpClientResponse.fromWeb(
-                request,
-                Response.json({
-                  files: [
-                    {
-                      id: "first.json",
-                      auth_index: "a",
-                      provider: "codex",
-                      ...(listsIdentity
-                        ? {
-                            email: "first@example.com",
-                            id_token: { chatgpt_account_id: workspace },
-                          }
-                        : {}),
-                    },
-                  ],
-                }),
-              );
-            }
-            const usage = {
-              plan_type: "pro",
-              rate_limit: {
-                secondary_window: {
-                  used_percent: 78,
-                  reset_at: 4070908800,
-                  limit_window_seconds: 604800,
-                },
-              },
-            };
-            return HttpClientResponse.fromWeb(
-              request,
-              Response.json(
-                refused
-                  ? { status_code: 429, body: "{}" }
-                  : { status_code: 200, body: JSON.stringify(usage) },
-              ),
-            );
-          }),
-        ),
-      ),
-      NodeCrypto.layer,
     ]),
   );
 });
@@ -522,46 +339,3 @@ it.each([
     ),
   ).toBe(expected);
 });
-
-it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold the failure", () =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(NOW);
-    const roomLeft = { ...hub([{ windows: [spent("five_hour", 2)] }]), origin: "http://hub.test" };
-    const cached = {
-      ...roomLeft,
-      accounts: roomLeft.accounts.map((account) => ({
-        ...account,
-        usageLimits: {
-          ...account.usageLimits,
-          windows: account.usageLimits.windows.map((window) => ({ ...window, usedPercent: 99 })),
-        },
-      })),
-    };
-    let current: ReadonlyArray<UsageLimitSourceSnapshot> = [cached];
-    let refresh: Effect.Effect<void> = Effect.sync(() => {
-      current = [roomLeft];
-    });
-    const lookup = UsageLimitSources.UsageLimitResetFallback.pipe(
-      Effect.flatMap((fallback) =>
-        fallback.resetAt(ProviderDriverKind.make("claudeAgent"), "http://hub.test", null),
-      ),
-      Effect.provide(
-        UsageLimitSources.layerResetFallback.pipe(
-          Layer.provide(
-            Layer.mock(UsageLimitSources.UsageLimitSources)({
-              current: Effect.sync(() => current),
-              refresh: Effect.suspend(() => refresh),
-            }),
-          ),
-        ),
-      ),
-    );
-    // The last poll saw room; the account was spent after it.
-    expect(yield* lookup).toBe(at(2));
-    current = [cached];
-    refresh = Effect.never;
-    const stalled = yield* Effect.forkChild(lookup);
-    yield* TestClock.adjust("5 seconds");
-    expect(yield* Fiber.join(stalled)).toBeNull();
-  }),
-);

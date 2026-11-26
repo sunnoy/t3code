@@ -1,16 +1,13 @@
 import type { SDKModel, SDKUser } from "@cursor/sdk";
 import * as Cache from "effect/Cache";
-import * as Config from "effect/Config";
-import * as Option from "effect/Option";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientRequest from "effect/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as CursorSdk from "./CursorSdk.ts";
+import { isCursorSdkError } from "./sdk.ts";
 
 export interface CursorSdkCatalogSnapshot {
   readonly user: SDKUser | undefined;
@@ -57,104 +54,26 @@ export interface CursorSdkCatalogProbes {
   ) => Effect.Effect<ReadonlyArray<SDKModel>, CursorSdkCatalogError>;
 }
 
-const CatalogUser = Schema.Struct({
-  apiKeyName: Schema.String,
-  createdAt: Schema.String,
-  userId: Schema.optionalKey(Schema.Number),
-  userEmail: Schema.optionalKey(Schema.String),
-  userFirstName: Schema.optionalKey(Schema.String),
-  userLastName: Schema.optionalKey(Schema.String),
-});
-const ModelParameterValue = Schema.Struct({ id: Schema.String, value: Schema.String });
-const CatalogModel = Schema.Struct({
-  id: Schema.String,
-  displayName: Schema.String,
-  description: Schema.optionalKey(Schema.String),
-  aliases: Schema.optionalKey(Schema.Array(Schema.String).pipe(Schema.mutable)),
-  parameters: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        displayName: Schema.optionalKey(Schema.String),
-        values: Schema.Array(
-          Schema.Struct({ value: Schema.String, displayName: Schema.optionalKey(Schema.String) }),
-        ).pipe(Schema.mutable),
-      }),
-    ).pipe(Schema.mutable),
-  ),
-  variants: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        params: Schema.Array(ModelParameterValue).pipe(Schema.mutable),
-        displayName: Schema.String,
-        description: Schema.optionalKey(Schema.String),
-        isDefault: Schema.optionalKey(Schema.Boolean),
-        isMaxMode: Schema.optionalKey(Schema.Boolean),
-      }),
-    ).pipe(Schema.mutable),
-  ),
-});
-const CatalogModels = Schema.Struct({ items: Schema.Array(CatalogModel).pipe(Schema.mutable) });
-const ApiError = Schema.Struct({
-  code: Schema.optionalKey(Schema.String),
-  message: Schema.optionalKey(Schema.String),
-});
-const ApiErrorEnvelope = Schema.Struct({ error: ApiError });
-const decodeApiError = Schema.decodeUnknownOption(ApiError);
-const decodeApiErrorEnvelope = Schema.decodeUnknownOption(ApiErrorEnvelope);
-const isCatalogError = Schema.is(CursorSdkCatalogError);
-
-// Catalog discovery uses public HTTP routes so signed-in startup does not initialize the agent runtime.
 const makeLiveProbes = Effect.gen(function* () {
-  const client = yield* HttpClient.HttpClient;
-  const baseUrl = (yield* Config.String("CURSOR_BACKEND_URL").pipe(
-    Config.withDefault("https://api.cursor.com"),
-    Effect.orDie,
-  )).replace(/\/$/, "");
-  const request = Effect.fn("CursorSdkCatalog.request")(function* (apiKey: string, path: string) {
-    const response = yield* client
-      .execute(
-        HttpClientRequest.get(`${baseUrl}${path}`).pipe(HttpClientRequest.bearerToken(apiKey)),
-      )
-      .pipe(
-        Effect.mapError(
-          (cause) => new CursorSdkCatalogError({ authenticationFailure: false, cause }),
-        ),
-      );
-    if (response.status < 200 || response.status >= 300) {
-      const body = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
-      const nested = decodeApiErrorEnvelope(body);
-      const parsed = Option.isSome(nested) ? Option.some(nested.value.error) : decodeApiError(body);
-      const error = Option.getOrUndefined(parsed);
-      return yield* new CursorSdkCatalogError({
-        authenticationFailure: response.status === 401,
-        status: response.status,
-        ...(error?.code === undefined ? {} : { code: error.code }),
-        cause: new Error(error?.message ?? `Cursor ${path} returned HTTP ${response.status}.`),
-      });
-    }
-    return response;
-  });
+  const sdkService = yield* CursorSdk.CursorSdk;
+  const request = <A>(run: (cursor: ReturnType<typeof sdkService.load>["Cursor"]) => Promise<A>) =>
+    Effect.tryPromise({
+      try: () => run(sdkService.load().Cursor),
+      catch: (cause) => {
+        const error = isCursorSdkError(cause, "CursorSdkError") ? cause : undefined;
+        const status = error?.status;
+        const code = error?.code;
+        return new CursorSdkCatalogError({
+          authenticationFailure: isCursorSdkError(cause, "AuthenticationError") || status === 401,
+          ...(status === undefined ? {} : { status }),
+          ...(code === undefined ? {} : { code }),
+          cause,
+        });
+      },
+    });
   return {
-    readUser: (apiKey) =>
-      request(apiKey, "/v1/me").pipe(
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(CatalogUser)),
-        Effect.mapError((cause) =>
-          isCatalogError(cause)
-            ? cause
-            : new CursorSdkCatalogError({ authenticationFailure: false, cause }),
-        ),
-      ),
-    readModels: (apiKey) =>
-      request(apiKey, "/v1/models").pipe(
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(CatalogModels)),
-        Effect.map((body) => body.items),
-        Effect.mapError((cause) =>
-          isCatalogError(cause)
-            ? cause
-            : new CursorSdkCatalogError({ authenticationFailure: false, cause }),
-        ),
-      ),
+    readUser: (apiKey) => request((cursor) => cursor.me({ apiKey })),
+    readModels: (apiKey) => request((cursor) => cursor.models.list({ apiKey })),
   } satisfies CursorSdkCatalogProbes;
 });
 

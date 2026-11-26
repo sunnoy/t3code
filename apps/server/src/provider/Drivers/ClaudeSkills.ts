@@ -12,7 +12,7 @@ import { parse as parseYamlDocument } from "yaml";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
-import { claudeAccountConfigPath, readClaudeOauthAccount } from "../claudeResetCredits.ts";
+import { claudeAccountConfigPath, readClaudeOauthAccount } from "../claudeAccountMetadata.ts";
 
 type ClaudeSkillScope = "user" | "project";
 
