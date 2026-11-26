@@ -68,7 +68,6 @@ const resetTime = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 const budgetPercent = (spent: number, limit: number) =>
   limit <= 0 ? 100 : clampPercent((spent / limit) * 100);
 
-/** Undefined alone permits the legacy credential reader; null data is authoritative. */
 export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(function* (
   directory: string | undefined,
 ) {
@@ -83,7 +82,7 @@ export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(fu
       (response.status === 200 &&
         response.headers["content-type"]?.split(";")[0]?.trim() === "text/html")
     )
-      return undefined;
+      return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     // OpenCode names the upstream cause, such as an expired Console login, in its error body.
     if (response.status < 200 || response.status >= 300)
       return makeUnavailableUsageLimits({

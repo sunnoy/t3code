@@ -476,7 +476,6 @@ jobs:
       tag: mobile-android-build/${{ needs.production.outputs.android_version }}/${{ needs.production.outputs.android_fingerprint }}
     secrets:
       EXPO_PRODUCTION_TOKEN: ${{ secrets.EXPO_PRODUCTION_TOKEN }}
-      MOBILE_SOURCEMAPS_R2: ${{ secrets.MOBILE_SOURCEMAPS_R2 }}
 
   ios:
     name: iOS store build
@@ -497,4 +496,3 @@ jobs:
       tag: mobile-ios-build/${{ needs.production.outputs.ios_profile }}/${{ needs.production.outputs.ios_version }}/${{ needs.production.outputs.ios_fingerprint }}
     secrets:
       EXPO_PRODUCTION_TOKEN: ${{ secrets.EXPO_PRODUCTION_TOKEN }}
-      MOBILE_SOURCEMAPS_R2: ${{ secrets.MOBILE_SOURCEMAPS_R2 }}

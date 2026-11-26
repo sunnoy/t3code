@@ -1154,6 +1154,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
 
   it.effect.each([
     { status: 200, data: null, reason: "unsupported" },
+    { status: 404, data: null, reason: "unsupported" },
     { status: 503, data: null, reason: "probeFailed" },
     {
       status: 200,
@@ -1185,7 +1186,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       Effect.gen(function* () {
         const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret");
         const server = HttpClient.make((request) => {
-          assert.notInclude(request.url, "opencode.ai/zen");
+          assert.strictEqual(new URL(request.url).origin, "https://remote.example");
           const path = new URL(request.url).pathname;
           if (path === "/api/experimental/usage/limits" || path === "/api/provider") {
             assert.strictEqual(request.headers.authorization, "Basic b3BlbmNvZGU6c2VjcmV0");

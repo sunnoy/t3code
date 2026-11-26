@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("loadRepoEnv", () => {
-  it("omits Connect inputs while retaining the normal build environment precedence", () => {
+  it("omits Connect and telemetry inputs while retaining the normal build environment precedence", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
@@ -34,6 +34,10 @@ describe("loadRepoEnv", () => {
           VITE_CLERK_JWT_TEMPLATE: "template_ci",
           T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
           VITE_T3CODE_RELAY_URL: "https://ci.example.test",
+          T3CODE_MOBILE_OTLP_TRACES_URL: "https://collector.example.test",
+          EXPO_PUBLIC_OTLP_TRACES_TOKEN: "mobile-test",
+          T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-test",
+          VITE_RELAY_OTLP_TRACES_TOKEN: "web-test",
         },
         repoRoot,
       }),

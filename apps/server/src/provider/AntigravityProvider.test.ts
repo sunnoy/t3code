@@ -27,7 +27,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
-import type { ServerProvider } from "@t3tools/contracts";
+import type { ServerProvider, ServerProviderUsageLimits } from "@t3tools/contracts";
 import {
   buildAntigravityModelsFromSession,
   makeAntigravityProvider,
@@ -139,6 +139,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly auth?: { readonly type: string; readonly label: string };
     readonly enabled?: boolean;
     readonly safe?: boolean;
+    readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
     readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   } = {},
 ) {
@@ -155,6 +156,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     {
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
+      ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
       ...(options.rememberedRuntimeModes
         ? { rememberedRuntimeModes: options.rememberedRuntimeModes }
         : {}),
@@ -1182,6 +1184,32 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
 });
 
 it.layer(makeLayerTest(true))("Antigravity periodic health checks", (it) => {
+  it.effect("refreshes quota periodically while provider status is in demand", () =>
+    Effect.gen(function* () {
+      const limits = {
+        checkedAt: "2026-10-09T12:00:00.000Z",
+        windows: [{ id: "gemini-5h", kind: "session", label: "Gemini · 5-hour", usedPercent: 10 }],
+      } satisfies ServerProviderUsageLimits;
+      const usage = yield* Ref.make<ServerProviderUsageLimits>(limits);
+      const harness = yield* makeHarness({ probeUsage: Ref.get(usage) });
+      const initial = yield* harness.nextPublish((snapshot) => !!snapshot.usageLimits);
+      yield* harness.initialize;
+      yield* harness.provider.onSessionStarted(started, "/workspace");
+      yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
+      expect((yield* initial)?.usageLimits).toEqual(limits);
+
+      const expired = {
+        checkedAt: "2026-10-09T12:05:00.000Z",
+        windows: [],
+        unavailable: { reason: "unsupported", message: "Sign in to Antigravity again." },
+      } satisfies ServerProviderUsageLimits;
+      yield* Ref.set(usage, expired);
+      yield* TestClock.adjust("5 minutes");
+      expect(yield* Ref.get(harness.probeCalls)).toBeGreaterThan(1);
+      expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(expired);
+    }),
+  );
+
   it.effect("rechecks a ready provider after one failed periodic check before publishing it", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

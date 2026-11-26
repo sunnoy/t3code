@@ -26,6 +26,8 @@ import type * as Scope from "effect/Scope";
 import type { AntigravityInstallationError } from "./AntigravityInstallation.ts";
 
 const CLI_WINDOW = /^(Five Hour|Weekly) Limit Remaining$/i;
+const AUTH_REQUIRED =
+  /\b(?:authentication required|sign in again|please (?:log|sign) in|invalid_grant|(?:access|refresh) token (?:has expired|is expired))\b/i;
 const PERCENT = /^\[.*\]\s+(\d{1,3}(?:\.\d+)?)%$/;
 const GROUPS = {
   "gemini models": { id: "gemini", label: "Gemini Models" },
@@ -129,11 +131,11 @@ export function parseAntigravityCliQuota(screen: string, now: number): ServerPro
 }
 
 export function readAntigravityQuotaTerminal(process: PtyProcess, now: () => number) {
-  return Effect.callback<ServerProviderUsageWindow[]>((resume) => {
+  return Effect.callback<ServerProviderUsageWindow[] | null>((resume) => {
     let output = EMPTY_TERMINAL_OUTPUT;
     let requested = false;
     let removeExit = () => {};
-    const complete = (windows: ServerProviderUsageWindow[]) => {
+    const complete = (windows: ServerProviderUsageWindow[] | null) => {
       removeData();
       removeExit();
       resume(Effect.succeed(windows));
@@ -141,7 +143,9 @@ export function readAntigravityQuotaTerminal(process: PtyProcess, now: () => num
     const removeData = process.onData((chunk) => {
       output = appendTerminalOutput(output, chunk, 16 * 1024);
       const screen = NodeUtil.stripVTControlCharacters(output.text);
-      if (!requested && /^\? for shortcuts\b/m.test(screen)) {
+      if (AUTH_REQUIRED.test(screen)) {
+        complete(null);
+      } else if (!requested && /^\? for shortcuts\b/m.test(screen)) {
         requested = true;
         try {
           process.write("/usage\r");
@@ -314,6 +318,13 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
     });
     yield* Effect.addFinalizer(() => Effect.sync(removeExit));
     const windows = yield* readAntigravityQuotaTerminal(process, Date.now);
+    if (windows === null) {
+      return makeUnavailableUsageLimits({
+        checkedAt,
+        reason: "unsupported",
+        message: "Sign in to Antigravity again to read account quota.",
+      });
+    }
     return windows.length > 0
       ? makeUsageLimits({ checkedAt, windows })
       : makeUnavailableUsageLimits({

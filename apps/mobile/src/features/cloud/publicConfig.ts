@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import { relayClerkTokenOptions } from "@t3tools/shared/relayAuth";
+import { relayClerkTokenOptions, T3_CONNECT_ENABLED } from "@t3tools/shared/relayAuth";
 import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
 import * as Schema from "effect/Schema";
 
@@ -57,6 +57,13 @@ function normalizeSecureUrl(value: unknown): string | null {
 }
 
 export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig?.extra) {
+  if (!T3_CONNECT_ENABLED) {
+    return {
+      clerk: { publishableKey: null, jwtTemplate: null },
+      relay: { url: null },
+      observability: { tracesUrl: null, tracesDataset: null, tracesToken: null },
+    } satisfies CloudPublicConfig;
+  }
   return {
     clerk: {
       publishableKey: trimNonEmpty(extra?.clerk?.publishableKey),

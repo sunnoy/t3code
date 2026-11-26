@@ -1,7 +1,11 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
-import type { PtyProcess } from "@t3tools/shared/PtyAdapter";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import type { PtyProcess, PtySpawnInput } from "@t3tools/shared/PtyAdapter";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vite-plus/test";
@@ -9,6 +13,7 @@ import {
   antigravityQuotaSandboxCommand,
   makeAntigravityQuotaRefresh,
   parseAntigravityCliQuota,
+  probeAntigravityCliQuota,
   readAntigravityQuotaTerminal,
 } from "./antigravityCliQuota.ts";
 
@@ -132,6 +137,85 @@ describe("Antigravity CLI quota report", () => {
       receive("\r\n" + report.at(-1));
       expect(yield* Fiber.join(result)).toHaveLength(4);
     }),
+  );
+
+  effectIt.effect.each([
+    { screen: report.join("\r\n"), reason: undefined },
+    { screen: "Authentication required: refresh token has expired", reason: "unsupported" },
+  ])("probes an isolated profile with a read-only login, result $reason", ({ screen, reason }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const profileDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-fixture-" });
+      const acpDirectory = path.join(profileDirectory, "antigravity-acp");
+      const loginPath = path.join(acpDirectory, "antigravity-oauth-token");
+      yield* fs.makeDirectory(acpDirectory);
+      yield* fs.writeFileString(loginPath, "synthetic-login");
+
+      const commands: Array<string> = [];
+      const spawn = (input: PtySpawnInput) =>
+        Effect.sync(() => {
+          expect(input.shell).toBe("bwrap");
+          const args = input.args ?? [];
+          const loginIndex = args.indexOf(loginPath);
+          expect(args[loginIndex - 1]).toBe("--ro-bind");
+          expect(args[loginIndex + 1]).toBe(
+            path.join(input.env.HOME!, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+          );
+          expect(input.env).toMatchObject({ AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "1" });
+          expect(input.env.AGY_ACCESS_TOKEN).toBeUndefined();
+          let data: ((chunk: string) => void) | undefined;
+          return {
+            pid: 1,
+            write: (command) => {
+              commands.push(String(command));
+              queueMicrotask(() => data?.(screen));
+            },
+            resize: () => {},
+            kill: () => {},
+            onData: (listener) => {
+              data = listener;
+              queueMicrotask(() => data?.("? for shortcuts\r\n"));
+              return () => {
+                data = undefined;
+              };
+            },
+            onExit: () => () => {},
+          } satisfies PtyProcess;
+        });
+
+      const limits = yield* probeAntigravityCliQuota({
+        profileDirectory,
+        authMethod: "oauth-personal",
+        executable: Effect.succeed("/fixture/agy"),
+        environment: { PATH: "/usr/bin", AGY_ACCESS_TOKEN: "unrelated-fixture-token" },
+        pty: { spawn },
+      });
+      expect(commands).toEqual(["/usage\r"]);
+      expect(limits.unavailable?.reason).toBe(reason);
+      expect(limits.windows).toHaveLength(reason ? 0 : 4);
+      expect(yield* fs.readFileString(loginPath)).toBe("synthetic-login");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(HostProcess.Platform, "linux"),
+    ),
+  );
+
+  effectIt.effect("reports quota as unsupported for non-personal profiles", () =>
+    Effect.gen(function* () {
+      const limits = yield* probeAntigravityCliQuota({
+        profileDirectory: "/fixture/antigravity",
+        authMethod: "gemini-api-key",
+        executable: Effect.die("unexpected quota executable"),
+        environment: {},
+        pty: { spawn: () => Effect.die("unexpected quota terminal") },
+      });
+      expect(limits).toMatchObject({ windows: [], unavailable: { reason: "unsupported" } });
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(HostProcess.Platform, "linux"),
+    ),
   );
 
   const sandboxInput = {

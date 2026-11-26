@@ -69,7 +69,7 @@ import * as AccountDeletion from "./accounts/AccountDeletion.ts";
 import * as HeldHooks from "./hooks/HeldHooks.ts";
 import * as HookInbox from "./hooks/HookInbox.ts";
 import * as HookInboxObject from "./hooks/HookInboxObject.ts";
-import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import * as MobileTelemetry from "./mobileTelemetry.ts";
 
 const layerWebcrypto = Layer.mergeAll(
   Digest.layerWebCrypto,
@@ -360,22 +360,13 @@ export const layer = Api.make(
       allowEndpoint: allowWith(hookEndpointRateLimit),
     });
 
-    const layerMobileTelemetryDisabled = HttpApiBuilder.group(
-      RelayApi,
-      "mobileTelemetry",
-      (handlers) =>
-        handlers.handleRaw("ingest", () =>
-          Effect.succeed(HttpServerResponse.empty({ status: 204 })),
-        ),
-    );
-
     const layerApp = Layer.mergeAll(
       layerRelayApi,
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),
       ),
-      layerMobileTelemetryDisabled,
+      MobileTelemetry.layer,
       AccountDeletion.layerApi,
     ).pipe(
       Layer.provideMerge(RelayHttpApi.layerClientAuth),
@@ -396,7 +387,7 @@ export const layer = Api.make(
       (stream) =>
         Effect.flatMap(ApnsDeliveries.ApnsDeliveries, (deliveries) =>
           deliveries.processBatch(stream),
-        ).pipe(Effect.provide(layerRuntime)),
+        ).pipe(Effect.withTracerEnabled(false), Effect.provide(layerRuntime)),
     );
 
     yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
@@ -410,8 +401,8 @@ export const layer = Api.make(
       },
       (stream) =>
         stream.pipe(
-          Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
           Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
+          Effect.withTracerEnabled(false),
           Effect.provide(layerRuntime),
         ),
     );

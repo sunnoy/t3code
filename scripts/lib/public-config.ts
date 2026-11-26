@@ -21,7 +21,8 @@ export interface T3CodePublicConfig {
 type Environment = Readonly<Record<string, string | undefined>>;
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../../..");
-const CONNECT_PUBLIC_ENV = /^(?:(?:T3CODE|VITE|EXPO_PUBLIC)_CLERK_|(?:VITE_)?T3CODE_RELAY_URL$)/u;
+const CLOUD_PUBLIC_ENV =
+  /^(?:(?:T3CODE|VITE|EXPO_PUBLIC)_CLERK_|(?:VITE_)?T3CODE_RELAY_URL$|(?:T3CODE_(?:MOBILE|RELAY_CLIENT)_OTLP|EXPO_PUBLIC_OTLP|VITE_RELAY_OTLP)_TRACES_)/u;
 
 export function loadRepoEnv({
   baseEnv = process.env,
@@ -104,7 +105,7 @@ export function loadRepoEnv({
   return T3_CONNECT_ENABLED
     ? environment
     : Object.fromEntries(
-        Object.entries(environment).filter(([name]) => !CONNECT_PUBLIC_ENV.test(name)),
+        Object.entries(environment).filter(([name]) => !CLOUD_PUBLIC_ENV.test(name)),
       );
 }
 

@@ -1320,7 +1320,7 @@ const RelayMobileTelemetryGroup = HttpApiGroup.make("mobileTelemetry")
       params: RelayMobileTelemetryParams,
     }),
   )
-  .annotate(OpenApi.Description, "Receive mobile app telemetry from expo-observe.");
+  .annotate(OpenApi.Description, "Acknowledge legacy mobile telemetry requests.");
 
 // Clerk signs with Svix headers; the handler reads raw bytes to verify the signature.
 const RelayAccountWebhooksGroup = HttpApiGroup.make("accountWebhooks")

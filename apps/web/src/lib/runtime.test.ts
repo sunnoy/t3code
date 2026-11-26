@@ -58,9 +58,12 @@ describe("web runtime relay telemetry policy", () => {
   ])("applies $surface before the first relay span", async (surface) => {
     const { desktopBridge } = surface;
     vi.resetModules();
-    vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
-    vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
-    vi.stubEnv("OTEL_SDK_DISABLED", "true");
+    vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "true");
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "t3-relay");
+    vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
+    vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "false");
+    vi.stubEnv("OTEL_SDK_DISABLED", "false");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://telemetry.example.test/v1/traces");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "relay-test");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "test-token");
@@ -74,9 +77,12 @@ describe("web runtime relay telemetry policy", () => {
     // Re-import after setting runtime policy: static initialization creates the exporter layer.
     const { runtime: freshRuntime } = await import("./runtime");
     const { setDelegate } = await import("../observability/clientTracer");
+    const cloudConfig = await import("../cloud/publicConfig");
     if ("server" in surface) {
-      (await import("../cloud/publicConfig")).setServerRelayTelemetry(surface.server);
+      cloudConfig.setServerRelayTelemetry(surface.server);
     }
+    expect(cloudConfig.hasCloudPublicConfig()).toBe(false);
+    expect(cloudConfig.resolveCloudPublicConfig().clerkPublishableKey).toBeNull();
     const userSpans: Array<string> = [];
 
     try {
