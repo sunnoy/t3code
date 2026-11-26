@@ -35,7 +35,7 @@ Download from [T3C Code Releases](https://github.com/sunnoy/t3code/releases):
 ### Option 1: Install script (Linux x64, macOS arm64, macOS x64)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sunnoy/t3code/fork/v0.1.12/scripts/install.sh | sh
+curl -fsSL https://github.com/sunnoy/t3code/releases/latest/download/install.sh | sh
 ```
 
 The script verifies `SHA256SUMS`, unpacks into `~/.t3/runtime/versions/<version>/`, and updates `~/.local/bin/t3` to point to the installed version.
@@ -53,7 +53,7 @@ The script verifies `SHA256SUMS`, unpacks into `~/.t3/runtime/versions/<version>
 - **Re-downloading a republished archive with the same version tag (e.g. refreshed `v0.1.12`)**: `install.sh` skips downloading when `~/.t3/runtime/versions/<version>` is already cached. Pass `T3CODE_FORCE=1` to force a fresh download, then restart the service:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sunnoy/t3code/fork/v0.1.12/scripts/install.sh | T3CODE_FORCE=1 sh
+curl -fsSL https://github.com/sunnoy/t3code/releases/latest/download/install.sh | T3CODE_FORCE=1 sh
 ~/.local/bin/t3 service restart
 ```
 

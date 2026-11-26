@@ -11,7 +11,7 @@ launch T3 Code and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://t3.codes/install.sh | sh
+curl -fsSL https://github.com/sunnoy/t3code/releases/latest/download/install.sh | sh
 ```
 
 On Windows, in PowerShell:

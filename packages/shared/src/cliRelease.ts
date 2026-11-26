@@ -7,6 +7,9 @@ export const CLI_RELEASE_REPOSITORY = "sunnoy/t3code";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
+// fork-server.yml uploads scripts/install.sh to every release, so this always serves the
+// installer that matches the newest archives. It resolves the version to install by itself.
+export const CLI_INSTALL_SCRIPT_URL = `${CLI_RELEASES_PAGE_URL}/latest/download/install.sh`;
 
 // Keep archive keys aligned with the matrix in fork-server.yml and the SSH runner's host check
 // in packages/ssh/src/tunnel.ts. darwin-x64 ships as a bundled-Node archive because Node SEA
