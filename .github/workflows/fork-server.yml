@@ -1,0 +1,100 @@
+name: T3C Code Server release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable T3C Code version to publish (X.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify Linux Server x64
+    if: github.repository == 'sunnoy/t3code' && startsWith(github.ref_name, 'fork/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set the release version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]]
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+      - name: Install patchelf
+        run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
+      - name: Build the server and its embedded web client
+        run: |
+          vp run --filter t3 build
+          node scripts/apply-web-brand-assets.ts production apps/server/dist/client
+          grep -Fq '<title>T3C Code' apps/server/dist/client/index.html
+          node apps/server/scripts/cli.ts build-exe --verbose
+      - name: Build the resource monitor
+        run: |
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$RUNNER_TEMP/cli-resource-monitor/linux-x64/"
+      - name: Create the archive and start its server
+        run: |
+          node scripts/build-cli-archive.ts --platform linux --arch x64 \
+            --version "$APP_VERSION" --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release
+          archive="t3-$APP_VERSION-linux-x64.tar.gz"
+          node scripts/smoke-cli-archive.ts --archive "release/$archive" --expect-version "$APP_VERSION"
+          tar -xOf "release/$archive" "t3-$APP_VERSION-linux-x64/LICENSE" | cmp - LICENSE
+          cd release
+          sha256sum "$archive" > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-server-x64
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish Linux Server x64
+    needs: build
+    concurrency:
+      group: t3c-release-${{ needs.build.outputs.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-server-x64
+          path: release
+      - name: Verify and publish
+        working-directory: release
+        run: |
+          archive="t3-$RELEASE_VERSION-linux-x64.tar.gz"
+          test -s "$archive"
+          sha256sum --check SHA256SUMS
+          cat > "$RUNNER_TEMP/t3c-release-notes.md" <<'NOTES'
+          T3C Code is an unofficial, independently maintained fork of T3 Code. The C stands for Clean. The archive includes the upstream MIT license.
+
+          Download the Linux Server x64 archive and extract it. Run ./t3 serve --lan from the extracted directory. Run t3 pair on the server and paste the pairing URL into Add environment in the official Mac app. Select that remote environment to use its providers.
+
+          SHA256SUMS verifies the server archive. T3C Code Server uses this repository for CLI updates.
+          NOTES
+          gh release create "v$RELEASE_VERSION" "$archive" SHA256SUMS --draft --target "$GITHUB_SHA" \
+            --title "T3C Code Server $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/t3c-release-notes.md"
+          gh release edit "v$RELEASE_VERSION" --draft=false --latest
