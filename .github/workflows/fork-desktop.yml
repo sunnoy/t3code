@@ -40,7 +40,10 @@ jobs:
           [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
           echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
-      - run: vp run build:desktop:bundle
+      - name: Build release bundles
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: vp run build:desktop:bundle
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: js-bundle
@@ -75,7 +78,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cli-resource-monitor/linux-x64"
           cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$RUNNER_TEMP/cli-resource-monitor/linux-x64/"
       - run: node scripts/apply-web-brand-assets.ts production apps/server/dist/client
-      - run: node apps/server/scripts/cli.ts build-exe --verbose
+      - name: Build the versioned server executable
+        env:
+          # The executable repacks the CLI from source on this runner.
+          APP_VERSION: ${{ needs.bundle.outputs.version }}
+        run: node apps/server/scripts/cli.ts build-exe --verbose
       - run: |
           node scripts/build-cli-archive.ts --platform linux --arch x64 \
             --version "${{ needs.bundle.outputs.version }}" \
