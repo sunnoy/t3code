@@ -35,14 +35,6 @@
       "types": "./src/server/accountUsage.ts",
       "import": "./src/server/accountUsage.ts"
     },
-    "./server/CursorAccountReader": {
-      "types": "./src/server/CursorAccountReader.ts",
-      "import": "./src/server/CursorAccountReader.ts"
-    },
-    "./server/CursorUsageAccounts": {
-      "types": "./src/server/CursorUsageAccounts.ts",
-      "import": "./src/server/CursorUsageAccounts.ts"
-    },
     "./server/CursorSdk": {
       "types": "./src/server/CursorSdk.ts",
       "import": "./src/server/CursorSdk.ts"

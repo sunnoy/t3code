@@ -7,7 +7,6 @@ import {
   type ProviderDriverKind,
   type ServerSettings,
   UsageLimitSourceConfig,
-  settingsSecretLiteral,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
@@ -28,12 +27,8 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
-import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
-import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { windowLimitsModel } from "../provider/claudeUsageLimits.ts";
-import { makeCliproxyApi } from "./cliproxyApi.ts";
 
 const decodeHttpQuotaJson = Schema.decodeUnknownEffect(Schema.fromJsonString(HttpQuotaResponse));
 const decodeHttpQuotaResponse = Effect.fn("UsageLimitSources.decodeHttpQuotaResponse")(function* (
@@ -84,62 +79,11 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   }
 }
 
-/**
- * A refused read of one account keeps its last good reading, as provider probes keep their bars
- * (see ServerProviderUsageLimits); a reading with none to keep stays listed as unreadable.
- */
-function keepLastGoodReadings(
-  previous: ReadonlyArray<UsageLimitSourceSnapshot>,
-  next: ReadonlyArray<UsageLimitSourceSnapshot>,
-): ReadonlyArray<UsageLimitSourceSnapshot> {
-  return next.map((source) => {
-    // Auth file names can be reused, so only the same hub and login may lend a reading.
-    const before = previous.find(
-      (candidate) => candidate.id === source.id && candidate.endpoint === source.endpoint,
-    );
-    if (!before) return source;
-    return {
-      ...source,
-      accounts: source.accounts.map((account) => {
-        if (account.usageLimits.unavailable?.reason !== "probeFailed") return account;
-        // Without a listed login, a reused auth file name cannot be told apart from the old one.
-        if (account.email === undefined && account.workspaceId === undefined) return account;
-        const last = before.accounts.find(
-          (candidate) =>
-            candidate.id === account.id &&
-            candidate.driver === account.driver &&
-            // Fingerprinted Antigravity readings omit the listed identity, so they are never lent.
-            candidate.usageLimits.credentialFingerprint === undefined &&
-            candidate.email === account.email &&
-            candidate.workspaceId === account.workspaceId,
-        );
-        if (!last || last.usageLimits.unavailable) return account;
-        // Only the reading is lent; an unread model list stays unknown.
-        return { ...last, models: account.models };
-      }),
-    };
-  });
-}
-
-function missingManagementKey(config: UsageLimitSourceConfig): string {
-  return typeof config.managementKey === "string"
-    ? "No management key configured."
-    : "Could not read the management key from its secret provider.";
-}
-
 /** @public */
 export const make = Effect.gen(function* () {
-  const api = yield* makeCliproxyApi;
   const http = yield* HttpClient.HttpClient;
   const settingsService = yield* Settings.ServerSettingsService;
-  const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-  const readManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
-    config: UsageLimitSourceConfig,
-  ) {
-    const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
-    return settingsSecretLiteral(resolved.managementKey);
-  });
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -164,23 +108,22 @@ export const make = Effect.gen(function* () {
         : {}),
       checkedAt,
     } as const;
-    const managementKey = yield* readManagementKey(config);
     if (config.kind === "http") {
       if (!url || !/^https?:$/.test(url.protocol) || url.username || url.password) {
         return { ...base, accounts: [], error: "Invalid HTTP quota source URL." };
       }
-      if (typeof config.managementKey !== "string" && !managementKey) {
-        return { ...base, accounts: [], error: "Could not resolve the quota source token." };
+      if (config.managementKey !== "") {
+        return {
+          ...base,
+          accounts: [],
+          error: "Authenticated quota sources are disabled in this build.",
+        };
       }
       const request = HttpClientRequest.get(url).pipe(
         HttpClientRequest.setHeader("Accept", "application/json"),
       );
       const result = yield* http
-        .execute(
-          managementKey
-            ? request.pipe(HttpClientRequest.setHeader("Authorization", `Bearer ${managementKey}`))
-            : request,
-        )
+        .execute(request)
         .pipe(
           Effect.flatMap(HttpClientResponse.filterStatusOk),
           Effect.flatMap(decodeHttpQuotaResponse),
@@ -192,17 +135,11 @@ export const make = Effect.gen(function* () {
         ? { ...base, accounts: [], quotaAccounts: result.success.accounts }
         : { ...base, accounts: [], error: "Could not read the HTTP quota source." };
     }
-    if (managementKey.length === 0) {
-      return { ...base, accounts: [], error: missingManagementKey(config) };
-    }
-    const accounts = yield* api
-      .readAccounts({ url: config.url, managementKey })
-      .pipe(Effect.result);
-    if (accounts._tag === "Failure") {
-      yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
-      return { ...base, accounts: [], error: accounts.failure.detail };
-    }
-    return { ...base, accounts: accounts.success };
+    return {
+      ...base,
+      accounts: [],
+      error: "Authenticated quota sources are disabled in this build.",
+    };
   });
 
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
@@ -228,37 +165,11 @@ export const make = Effect.gen(function* () {
       ([id, config]) => readSource(id as UsageLimitSourceId, config),
       { concurrency: 4 },
     );
-    yield* publish(keepLastGoodReadings(yield* Ref.get(stateRef), snapshots));
+    yield* publish(snapshots);
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
 
-  // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
-  const consumeResetCredit = Effect.fn("UsageLimitSources.consumeResetCredit")(function* (
-    input: UsageLimitSourceConsumeResetCreditInput,
-  ) {
-    const settings = yield* settingsService.getSettings.pipe(
-      Effect.mapError(() => new UsageLimitSourceError({ detail: "Could not read hub settings." })),
-    );
-    const config = settings.usageLimitSources[input.sourceId];
-    if (!config?.enabled || config.kind !== "cliproxy") {
-      return yield* new UsageLimitSourceError({
-        detail: "The usage limit source is missing or disabled.",
-      });
-    }
-    const managementKey = yield* readManagementKey(config);
-    if (managementKey.length === 0) {
-      return yield* new UsageLimitSourceError({ detail: missingManagementKey(config) });
-    }
-    const result = yield* api.consume(
-      { url: config.url, managementKey },
-      input.accountId,
-      input.creditId,
-    );
-    // A redemption changes the reading, so a refused re-read must not bring back the one before it.
-    const snapshot = yield* readSource(input.sourceId, config);
-    const previous = yield* Ref.get(stateRef);
-    yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
-    return result;
-  }, refreshLock.withPermits(1));
+  const consumeResetCredit = () =>
+    Effect.fail(new UsageLimitSourceError({ detail: "Redeem credits through the provider." }));
 
   yield* settingsService.streamChanges.pipe(
     Stream.map((settings) => settings.usageLimitSources),
@@ -307,9 +218,7 @@ export const make = Effect.gen(function* () {
   } satisfies UsageLimitSources["Service"];
 });
 
-export const layer = Layer.effect(UsageLimitSources, make).pipe(
-  Layer.provide(SecretResolverLayer.layer),
-);
+export const layer = Layer.effect(UsageLimitSources, make);
 
 /** A hub returns a usage limit only when every account it routes the model to is spent. */
 export function hubPoolResetAt(

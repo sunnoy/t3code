@@ -72,6 +72,7 @@ import {
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
+import { probeAntigravityCliQuota } from "../antigravityCliQuota.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -526,7 +527,10 @@ export const AntigravityDriver: ProviderDriver<
     const authFlow: AntigravityAuth = yield* makeAntigravityAuth({
       instanceId,
       makeRuntime: makeDisposableRuntime,
-      onAuthenticated: publishCatalog,
+      onAuthenticated: (started, runtime) =>
+        Effect.suspend(() => provider.onSignedIn).pipe(
+          Effect.andThen(publishCatalog(started, runtime)),
+        ),
       onSignedOut: Effect.suspend(() => provider.onSignedOut),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
       codeLogin,
@@ -571,10 +575,23 @@ export const AntigravityDriver: ProviderDriver<
       };
     });
 
+    const usage = probeAntigravityCliQuota({
+      profileDirectory,
+      authMethod: auth.authMethod,
+      environment: processEnvironment,
+      executable: installation
+        .acquire(settings.binaryPath, processEnvironment)
+        .pipe(Effect.map((resolved) => resolved.executablePath)),
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
       probe,
+      probeUsage: usage,
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       ...(rememberedRuntimeModes ? { rememberedRuntimeModes } : {}),
       rememberRuntimeModes: (modes) =>

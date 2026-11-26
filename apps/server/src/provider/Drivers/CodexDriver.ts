@@ -57,10 +57,8 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
-import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
 import { codexUsageReader } from "./codexUsage.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
-import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -144,8 +142,7 @@ export type CodexDriverEnv =
   | ServerConfig.ServerConfig
   | ServerSecretStore.ServerSecretStore
   | ServerEnvironment.ServerEnvironmentIdentity
-  | CodexInstallation.CodexInstallation
-  | CodexManagedTokenBroker.CodexManagedTokenBroker;
+  | CodexInstallation.CodexInstallation;
 
 export const CodexDriver: ProviderDriver<
   CodexSettings,
@@ -168,15 +165,13 @@ export const CodexDriver: ProviderDriver<
     enabled,
     config,
   }) {
-    if (config.setupMode === "managed")
-      return yield* makeManagedCodexProvider({
+    if (config.setupMode === "managed") {
+      return yield* new ProviderDriverError({
+        driver: DRIVER_KIND,
         instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
+        detail: "Choose an existing Codex CLI and run codex login to connect an account.",
       });
+    }
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
     const fileSystem = yield* FileSystem.FileSystem;

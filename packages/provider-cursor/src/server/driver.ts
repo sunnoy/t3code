@@ -10,9 +10,6 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/http/HttpClient";
-import { cursorRateModel } from "./accountUsage.ts";
-import { readCursorUsageLimits } from "./usageLimits.ts";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { makeCursorTextGeneration } from "./textGeneration.ts";
@@ -39,7 +36,6 @@ import { makeCursorAuth } from "./auth.ts";
 import * as CursorCredentialStore from "./credentialStore.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import * as CursorSdk from "./CursorSdk.ts";
-import * as CursorUsageAccounts from "./CursorUsageAccounts.ts";
 
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 const isSdkRunnerError = Schema.is(CursorAgentSdk.CursorAgentSdkRunnerError);
@@ -55,15 +51,10 @@ export type CursorDriverEnv =
   | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
-  | HttpClient.HttpClient
   | CursorSdk.CursorSdk
   | ProviderHost.ProviderHost;
 
-export const CursorDriver: ProviderDriver<
-  CursorSettings,
-  CursorDriverEnv,
-  CursorUsageAccounts.CursorUsageAccounts
-> = {
+export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
     displayName: "Cursor",
@@ -71,22 +62,6 @@ export const CursorDriver: ProviderDriver<
   },
   configSchema: CursorSettings,
   defaultConfig: (): CursorSettings => decodeCursorSettings({}),
-  usage: {
-    kind: "scan",
-    provider: "cursor",
-    rateModel: cursorRateModel,
-    scan: ({ instances, windowStartMs, retentionCutoffMs, awaitRefresh }) =>
-      CursorUsageAccounts.CursorUsageAccounts.pipe(
-        Effect.flatMap((accounts) =>
-          accounts.scan({
-            instances,
-            windowStartMs,
-            retentionCutoffMs,
-            awaitRefresh,
-          }),
-        ),
-      ),
-  },
   create: Effect.fn("CursorDriver.create")(function* ({
     instanceId,
     displayName,
@@ -98,7 +73,6 @@ export const CursorDriver: ProviderDriver<
     const host = yield* ProviderHost.ProviderHost;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const httpClient = yield* HttpClient.HttpClient;
     const sdkRunner = yield* CursorAgentSdk.CursorAgentSdkRunner;
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -218,6 +192,7 @@ export const CursorDriver: ProviderDriver<
       sdkRunner,
     );
 
+    const sdk = yield* CursorSdk.CursorSdk;
     const checkProvider = auth.readApiKey.pipe(
       Effect.orElseSucceed(() => undefined),
       Effect.flatMap((apiKey) =>
@@ -228,20 +203,6 @@ export const CursorDriver: ProviderDriver<
             CURSOR_API_KEY: apiKey,
           },
           auth.usesApiKey ? "api-key" : "browser",
-        ).pipe(
-          Effect.filterOrElse(
-            (snapshot) =>
-              !(
-                effectiveConfig.enabled &&
-                snapshot.installed &&
-                snapshot.auth.status === "authenticated"
-              ),
-            (snapshot) =>
-              readCursorUsageLimits(effectiveConfig, {
-                ...processEnv,
-                CURSOR_API_KEY: apiKey,
-              }).pipe(Effect.map((usageLimits) => ({ ...snapshot, usageLimits }))),
-          ),
         ),
       ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -269,7 +230,7 @@ export const CursorDriver: ProviderDriver<
         ),
       ),
       Effect.provide(CursorSdkCatalog.layer),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(CursorSdk.CursorSdk, sdk),
     );
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);

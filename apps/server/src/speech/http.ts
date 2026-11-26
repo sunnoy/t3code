@@ -8,7 +8,6 @@ import {
   EnvironmentHttpApi,
   type EnvironmentSpeechModels,
   EnvironmentVoiceBodyLimit,
-  requiredScopesForServerSettingsPatch,
   SPEECH_MAX_OPTIONS_BYTES,
   TextGenerationError,
 } from "@t3tools/contracts";
@@ -16,7 +15,6 @@ import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -27,8 +25,8 @@ import {
   failEnvironmentInvalidRequest,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SpeechPostProcessing from "./postProcessing.ts";
-import * as CloudSpeech from "./CloudSpeech.ts";
 import * as SpeechService from "./SpeechService.ts";
 
 const MAX_TRANSCRIBE_BODY_BYTES = SpeechService.MAX_SPEECH_BYTES + SPEECH_MAX_OPTIONS_BYTES + 4;
@@ -81,7 +79,7 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
   "voice",
   Effect.fnUntraced(function* (handlers) {
     const speech = yield* SpeechService.SpeechService;
-    const cloud = yield* CloudSpeech.CloudSpeech;
+    const settings = yield* ServerSettings.ServerSettingsService;
     const postProcessing = yield* SpeechPostProcessing.SpeechPostProcessing;
     const guard = Effect.fnUntraced(function* (
       endpoint: string,
@@ -95,25 +93,18 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
         "cloudKeys",
         Effect.fn("environment.voice.cloudKeys")(function* (args) {
           yield* guard(args.endpoint.name);
-          return yield* cloud.configured.pipe(
-            Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
-          );
+          return { openai: false, xai: false, openrouter: false };
         }),
       )
       .handle(
         "setCloudKey",
         Effect.fn("environment.voice.setCloudKey")(function* (args) {
           yield* guard(args.endpoint.name, AuthSettingsWriteScope);
-          // The key is a setting, so saving it needs what the same settings patch would.
-          const { key } = args.payload;
-          const value = key === null || Redacted.isRedacted(key) ? "" : key;
-          for (const scope of requiredScopesForServerSettingsPatch({
-            cloudSpeechCredentials: { [args.params.provider]: value },
-          })) {
-            yield* requireEnvironmentScope(scope);
-          }
-          yield* cloud
-            .setKey(args.params.provider, args.payload.key)
+          // Existing clients can clear a stored key after upgrading.
+          if (args.payload.key !== null)
+            return yield* failEnvironmentInvalidRequest("speech_unavailable");
+          yield* settings
+            .updateSettings({ cloudSpeechCredentials: { [args.params.provider]: "" } })
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         }),
       )
@@ -121,29 +112,14 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
         "cloudModels",
         Effect.fn("environment.voice.cloudModels")(function* (args) {
           yield* guard(args.endpoint.name);
-          return { models: yield* cloud.models };
+          return { models: [] };
         }),
       )
       .handle(
         "transcribeCloud",
         Effect.fn("environment.voice.transcribeCloud")(function* (args) {
           yield* guard(args.endpoint.name);
-          const decoded = parseAudio(args.payload);
-          if (Option.isNone(decoded)) return yield* failEnvironmentInvalidRequest("invalid_audio");
-          const text = yield* cloud
-            .transcribe(
-              args.params.provider,
-              decoded.value.pcm,
-              decoded.value.options,
-              args.query.model,
-            )
-            .pipe(
-              Effect.catchTags({
-                ServerSettingsError: (error) => failEnvironmentInternal("internal_error", error),
-                SpeechInvalidAudioError: () => failEnvironmentInvalidRequest("invalid_audio"),
-              }),
-            );
-          return { text };
+          return yield* failEnvironmentInvalidRequest("speech_unavailable");
         }),
       )
       .handle(

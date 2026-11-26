@@ -8,7 +8,6 @@ import {
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
-  type ServerProviderResetCredits,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -674,7 +673,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
   /** Shared with the adapter so turn events reuse the scoped-bucket names this probe saw. */
   scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>,
-  resolveResetCredits?: (version: string) => Effect.Effect<ServerProviderResetCredits | undefined>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -881,13 +879,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
           response: capabilities.usage,
           checkedAt: usageCheckedAt,
         }).limits;
-  const resetCredits =
-    resolveResetCredits &&
-    capabilities.subscriptionType &&
-    !usageLimits.unavailable &&
-    parsedVersion
-      ? yield* resolveResetCredits(parsedVersion)
-      : undefined;
   const provider = buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
@@ -907,7 +898,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
-      usageLimits: resetCredits ? { ...usageLimits, resetCredits } : usageLimits,
+      usageLimits,
     },
   });
   // Claude Code lists gateway models only while its one gateway cache holds this base URL, and

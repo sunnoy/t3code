@@ -26,7 +26,6 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
-import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
   CommandId,
@@ -2782,7 +2781,13 @@ export const layerWsRpc = (
         [WS_METHODS.chatGptReconnectProfile]: (input) => providerAuth.reconnectProfile(input),
         [WS_METHODS.chatGptImportProfile]: (input) => providerAuth.importProfile(input),
         [WS_METHODS.chatGptHandoffSubscribe]: (input) =>
-          subscribeChatGptHandoff(input, currentSessionId),
+          Stream.fail(
+            new ProviderSetupError({
+              instanceId: input.instanceId,
+              operation: "authenticate",
+              detail: "Use an existing Codex CLI login in this build.",
+            }),
+          ),
         [WS_METHODS.providerAuthCancel]: (input) => providerAuth.cancel(input, currentSessionId),
         [WS_METHODS.providerAuthRemoveMethod]: (input) => providerAuth.removeMethod(input),
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
