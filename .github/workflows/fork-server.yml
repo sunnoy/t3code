@@ -13,10 +13,35 @@ permissions:
 
 jobs:
   build:
-    name: Build and verify Linux Server x64
+    name: Build and verify ${{ matrix.label }}
     if: github.repository == 'sunnoy/t3code' && startsWith(github.ref_name, 'fork/v')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux Server x64
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            platform_key: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            sea: true
+          - label: macOS Server arm64
+            runner: macos-15
+            platform: mac
+            arch: arm64
+            platform_key: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            sea: true
+          - label: macOS Server x64
+            runner: macos-15-intel
+            platform: mac
+            arch: x64
+            platform_key: darwin-x64
+            rust_target: x86_64-apple-darwin
+            sea: false
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -35,37 +60,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-gnu
+          targets: ${{ matrix.rust_target }}
       - name: Install patchelf
+        if: matrix.platform == 'linux'
         run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
       - name: Build the server and its embedded web client
         run: |
           vp run --filter t3 build
           node scripts/apply-web-brand-assets.ts production apps/server/dist/client
           grep -Fq '<title>T3C Code' apps/server/dist/client/index.html
-          node apps/server/scripts/cli.ts build-exe --verbose
+      - name: Build single-executable
+        if: matrix.sea
+        run: node apps/server/scripts/cli.ts build-exe --verbose
       - name: Build the resource monitor
         run: |
-          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
-          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/linux-x64"
-          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor "$RUNNER_TEMP/cli-resource-monitor/linux-x64/"
-      - name: Create the archive and start its server
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ matrix.rust_target }}"
+          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.platform_key }}"
+          cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/t3-resource-monitor" \
+            "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.platform_key }}/"
+      - name: Create the archive and smoke-test its server
         run: |
-          node scripts/build-cli-archive.ts --platform linux --arch x64 \
+          node scripts/build-cli-archive.ts --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
             --version "$APP_VERSION" --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release
-          archive="t3-$APP_VERSION-linux-x64.tar.gz"
+          archive="t3-$APP_VERSION-${{ matrix.platform_key }}.tar.gz"
           node scripts/smoke-cli-archive.ts --archive "release/$archive" --expect-version "$APP_VERSION"
-          tar -xOf "release/$archive" "t3-$APP_VERSION-linux-x64/LICENSE" | cmp - LICENSE
-          cd release
-          sha256sum "$archive" > SHA256SUMS
+          tar -xOf "release/$archive" "t3-$APP_VERSION-${{ matrix.platform_key }}/LICENSE" | cmp - LICENSE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux-server-x64
-          path: release/*
+          name: server-${{ matrix.platform_key }}
+          path: release/*.tar.gz
           if-no-files-found: error
 
   publish:
-    name: Publish Linux Server x64
+    name: Publish Server archives
     needs: build
     concurrency:
       group: t3c-release-${{ needs.build.outputs.version }}
@@ -80,21 +107,39 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: linux-server-x64
+          pattern: server-*
+          merge-multiple: true
           path: release
       - name: Verify and publish
         working-directory: release
         run: |
-          archive="t3-$RELEASE_VERSION-linux-x64.tar.gz"
-          test -s "$archive"
+          archives=(
+            "t3-$RELEASE_VERSION-darwin-arm64.tar.gz"
+            "t3-$RELEASE_VERSION-darwin-x64.tar.gz"
+            "t3-$RELEASE_VERSION-linux-x64.tar.gz"
+          )
+          for archive in "${archives[@]}"; do
+            test -s "$archive"
+          done
+          sha256sum "${archives[@]}" > SHA256SUMS
           sha256sum --check SHA256SUMS
           cat > "$RUNNER_TEMP/t3c-release-notes.md" <<'NOTES'
-          T3C Code is an unofficial, independently maintained fork of T3 Code. The C stands for Clean. The archive includes the upstream MIT license.
+          T3C Code is an unofficial, independently maintained fork of T3 Code. The C stands for Clean. Each archive includes the web app and the upstream MIT license.
 
-          Download the Linux Server x64 archive and extract it. Run ./t3 serve --lan from the extracted directory. Run t3 pair on the server and paste the pairing URL into Add environment in the official Mac app. Select that remote environment to use its providers.
+          ### Archives
+          - **Linux x64** (`linux-x64`): Node single-executable server.
+          - **macOS Apple Silicon** (`darwin-arm64`): Node single-executable server (ad-hoc signed).
+          - **macOS Intel** (`darwin-x64`): Self-contained bundled Node server (ad-hoc signed; Node SEA is unsupported on Intel macOS).
 
-          SHA256SUMS verifies the server archive. T3C Code Server uses this repository for CLI updates.
+          ### Quick start
+          Extract the archive for your platform. On macOS, if downloaded through a browser, clear quarantine first: `xattr -dr com.apple.quarantine ./t3-*-darwin-*`.
+
+          - Run in foreground: `./t3 serve` (or `./t3 serve --lan` for LAN access).
+          - Run as a background service that keeps running when the desktop client closes: `./t3 service install` (uses `systemd` on Linux and `launchd` on macOS).
+          - Connect the official Mac app: disable **Local environment** in Settings, run `./t3 pair` on the server, and paste the pairing URL into **Add environment**.
+
+          `SHA256SUMS` verifies all archives. T3C Code Server uses this repository for CLI updates.
           NOTES
-          gh release create "v$RELEASE_VERSION" "$archive" SHA256SUMS --draft --target "$GITHUB_SHA" \
+          gh release create "v$RELEASE_VERSION" "${archives[@]}" SHA256SUMS --draft --target "$GITHUB_SHA" \
             --title "T3C Code Server $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/t3c-release-notes.md"
           gh release edit "v$RELEASE_VERSION" --draft=false --latest

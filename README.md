@@ -17,15 +17,17 @@ T3C Code runs the coding agents on your machine and gives them one interface. It
 
 - Account and quota requests go through the configured provider runtimes. Claude voucher lookup and redemption are removed.
 - Telemetry and T3 Connect are disabled. Pair with a server directly over your private network.
-- The Linux Server CLI finds updates in the fork’s GitHub Releases.
+- The Server CLI finds updates in the fork’s GitHub Releases (`linux-x64`, `darwin-arm64`, `darwin-x64`).
 
 ## Install
 
-Download the Linux Server x64 tar.gz from [T3C Code Releases](https://github.com/sunnoy/t3code/releases). Extract it and run `./t3 serve --lan` from the extracted directory. The archive includes the web app and the MIT license.
+Download the server archive for your platform from [T3C Code Releases](https://github.com/sunnoy/t3code/releases) (`linux-x64`, `darwin-arm64`, or `darwin-x64`). Extract it and run `./t3 serve` (or `./t3 serve --lan` for LAN access), or install it as a background service with `./t3 service install` (`systemd` on Linux, `launchd` on macOS). Each archive includes the web app and the MIT license.
+
+On macOS, archives are ad-hoc signed without Apple Developer ID notarization. If downloaded via a browser, clear quarantine before running: `xattr -dr com.apple.quarantine ./t3-*-darwin-*`.
 
 ### Connect the official macOS app
 
-With the server running, run `./t3 pair` on the Linux host. Paste the LAN pairing URL into **Add environment** in the official Mac app, then select that remote environment. Provider operations in that environment run on the Linux host. See the upstream [LAN pairing guide](./docs/user/remote-access.md#pair-over-a-lan-or-private-network).
+With the server running (either on Linux or locally on macOS as a background service), turn off **Local environment** in the official Mac app Settings, run `./t3 pair`, and paste the pairing URL into **Add environment**. Closing the Mac app leaves the background server running. See the upstream [LAN pairing guide](./docs/user/remote-access.md#pair-over-a-lan-or-private-network).
 
 ### Sign in to an agent
 
