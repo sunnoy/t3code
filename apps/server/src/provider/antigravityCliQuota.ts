@@ -49,6 +49,73 @@ export function parseAntigravityCliQuota(stdout: string): ServerProviderUsageWin
   return [...windows.values()];
 }
 
+type QuotaSandboxPlatform = "linux" | "darwin";
+
+const isQuotaSandboxPlatform = (platform: NodeJS.Platform): platform is QuotaSandboxPlatform =>
+  platform === "linux" || platform === "darwin";
+
+// Seatbelt matches resolved paths, so HOME_DIR must be the temp home's real path
+// (/private/var/folders/... rather than /var/folders/...).
+const MACOS_QUOTA_SANDBOX_PROFILE = [
+  "(version 1)",
+  "(allow default)",
+  "(deny file-write*)",
+  '(allow file-write* (subpath (param "HOME_DIR")) (subpath "/dev"))',
+].join("\n");
+
+/**
+ * The command that runs the standalone CLI with writes confined to `home`.
+ * Linux mounts the instance login read-only over an empty file. macOS has no
+ * bind mounts: `home` holds a symlink to the login, and the sandbox denies the
+ * write through it, so a token refresh cannot touch the active ACP sign-in.
+ */
+export function antigravityQuotaSandboxCommand(input: {
+  readonly platform: QuotaSandboxPlatform;
+  readonly home: string;
+  readonly loginPath: string;
+  readonly loginTarget: string;
+  readonly executable: string;
+  readonly args: ReadonlyArray<string>;
+}): { readonly command: string; readonly args: ReadonlyArray<string> } {
+  if (input.platform === "darwin") {
+    return {
+      command: "/usr/bin/sandbox-exec",
+      args: [
+        "-D",
+        `HOME_DIR=${input.home}`,
+        "-p",
+        MACOS_QUOTA_SANDBOX_PROFILE,
+        input.executable,
+        ...input.args,
+      ],
+    };
+  }
+  return {
+    command: "bwrap",
+    args: [
+      "--die-with-parent",
+      "--ro-bind",
+      "/",
+      "/",
+      "--bind",
+      input.home,
+      input.home,
+      "--ro-bind",
+      input.loginPath,
+      input.loginTarget,
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--chdir",
+      input.home,
+      "--",
+      input.executable,
+      ...input.args,
+    ],
+  };
+}
+
 export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(function* (input: {
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
@@ -57,7 +124,8 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
 }) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const unsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
-  if (input.authMethod !== "oauth-personal" || (yield* HostProcess.Platform) !== "linux") {
+  const platform = yield* HostProcess.Platform;
+  if (input.authMethod !== "oauth-personal" || !isQuotaSandboxPlatform(platform)) {
     return unsupported;
   }
   return yield* Effect.gen(function* () {
@@ -68,11 +136,15 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
     if (!(yield* fs.exists(loginPath))) return unsupported;
 
     const executable = yield* input.executable;
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-usage-" });
+    const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-usage-" }));
     const cliDirectory = path.join(home, ".gemini", "antigravity-cli");
     const loginTarget = path.join(cliDirectory, loginName);
     yield* fs.makeDirectory(cliDirectory, { recursive: true });
-    yield* fs.writeFileString(loginTarget, "", { mode: 0o600 });
+    if (platform === "darwin") {
+      yield* fs.symlink(yield* fs.realPath(loginPath), loginTarget);
+    } else {
+      yield* fs.writeFileString(loginTarget, "", { mode: 0o600 });
+    }
     yield* fs.writeFileString(
       path.join(cliDirectory, "settings.json"),
       '{"auth":{"type":"oauth-personal"}}\n',
@@ -83,50 +155,32 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
 
     // The standalone CLI has its own home layout. Give it only this instance's
     // login and an isolated writable home, leaving the active ACP state untouched.
-    const command = ChildProcess.make(
-      "bwrap",
-      [
-        "--die-with-parent",
-        "--ro-bind",
-        "/",
-        "/",
-        "--bind",
-        home,
-        home,
-        "--ro-bind",
-        loginPath,
-        loginTarget,
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--chdir",
-        home,
-        "--",
-        executable,
-        "--print",
-        "/usage",
-        "--output-format",
-        "text",
-        "--print-timeout",
-        "15s",
-      ],
-      {
-        cwd: home,
-        stdin: "ignore",
-        extendEnv: false,
-        env: {
-          ...env,
-          HOME: home,
-          TMPDIR: home,
-          TERM: "dumb",
-          SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
-          AGY_CLI_DISABLE_AUTO_UPDATE: "true",
-          BROWSER: "/bin/false",
-        },
+    const sandbox = antigravityQuotaSandboxCommand({
+      platform,
+      home,
+      loginPath,
+      loginTarget,
+      executable,
+      args: ["--print", "/usage", "--output-format", "text", "--print-timeout", "15s"],
+    });
+    const command = ChildProcess.make(sandbox.command, [...sandbox.args], {
+      cwd: home,
+      stdin: "ignore",
+      extendEnv: false,
+      env: {
+        ...env,
+        HOME: home,
+        TMPDIR: home,
+        TERM: "dumb",
+        // agy keeps Google sign-ins in the OS keyring unless it believes it runs over SSH.
+        SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
+        AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+        BROWSER: "/bin/false",
       },
-    );
-    const result = yield* spawnAndCollect("bwrap", command, { maxStdoutBytes: 32 * 1024 });
+    });
+    const result = yield* spawnAndCollect(sandbox.command, command, {
+      maxStdoutBytes: 32 * 1024,
+    });
     const windows = result.code === 0 ? parseAntigravityCliQuota(result.stdout) : [];
     return windows.length > 0
       ? makeUsageLimits({ checkedAt, windows })
@@ -142,7 +196,10 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
       makeUnavailableUsageLimits({
         checkedAt,
         reason: "probeFailed",
-        message: "Antigravity CLI quota needs a working bubblewrap and a valid instance sign-in.",
+        message:
+          platform === "darwin"
+            ? "Antigravity CLI quota needs a working sandbox-exec and a valid instance sign-in."
+            : "Antigravity CLI quota needs a working bubblewrap and a valid instance sign-in.",
       }),
     ),
   );
