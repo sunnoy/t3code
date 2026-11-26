@@ -27,6 +27,7 @@ import {
   resolveFffNativeDependencies,
   STAGE_INSTALL_ARGS,
 } from "./build-desktop-artifact.ts";
+import { stageBundledNodeCli } from "./lib/bundled-node-cli.ts";
 import { assertLinuxArm64PageCompatibility } from "./lib/linux-arm64-sea.ts";
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { signWithJsign } from "./lib/windows-jsign.ts";
@@ -604,23 +605,41 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
     "dist-exe",
     `t3-${targetKey}${input.platform === "win" ? ".exe" : ""}`,
   );
+  // Node SEA segfaults on Intel macOS (darwin-x64), so darwin-x64 ships a bundled Node binary
+  // alongside the compiled JS bundle and a POSIX `t3` wrapper script.
+  const useBundledNode = input.platform === "mac" && input.arch === "x64";
   // The unsuffixed executable is valid only for the host platform and architecture.
   const hostPlatform = yield* HostProcess.Platform;
-  const hostKey = `${hostPlatform === "win32" ? "win" : hostPlatform}-${yield* HostProcess.Architecture}`;
+  const hostArch = yield* HostProcess.Architecture;
+  const hostKey = `${hostPlatform === "win32" ? "win" : hostPlatform}-${hostArch}`;
   const builtExecutable = (yield* fs.exists(targetExecutable))
     ? targetExecutable
     : targetKey === hostKey
       ? path.join(serverDir, "dist-exe", executableName)
       : targetExecutable;
-  const webClient = path.join(serverDir, "dist/client");
+  const serverDistDir = path.join(serverDir, "dist");
+  const webClient = path.join(serverDistDir, "client");
   const resourceMonitorDir = Option.getOrElse(input.resourceMonitorDir, () =>
     path.join(serverDir, "dist/resource-monitor"),
   );
 
-  yield* requireInput(
-    builtExecutable,
-    `Run \`node apps/server/scripts/cli.ts build-exe${targetKey === hostKey ? "" : ` --target ${targetKey}`}\` first.`,
-  );
+  if (useBundledNode) {
+    if (hostPlatform !== "darwin" || hostArch !== "x64") {
+      return yield* new CliArchiveInputMissingError({
+        inputPath: targetKey,
+        hint: `Bundled-Node ${targetKey} archives must be built on a darwin-x64 host (running ${hostKey}).`,
+      });
+    }
+    yield* requireInput(
+      path.join(serverDistDir, "bin.mjs"),
+      "Run `vp run --filter t3 build` first.",
+    );
+  } else {
+    yield* requireInput(
+      builtExecutable,
+      `Run \`node apps/server/scripts/cli.ts build-exe${targetKey === hostKey ? "" : ` --target ${targetKey}`}\` first.`,
+    );
+  }
   yield* requireInput(path.join(webClient, "index.html"), "Run `vp run --filter t3 build` first.");
   yield* requireInput(
     resourceMonitorDir,
@@ -633,7 +652,19 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.makeDirectory(contentDir, { recursive: true });
 
   yield* Effect.log(`[cli-archive] Staging ${stem}...`);
-  yield* fs.copyFile(builtExecutable, path.join(contentDir, executableName));
+  let signedExecutablePath = path.join(contentDir, executableName);
+  if (useBundledNode) {
+    const staged = yield* stageBundledNodeCli({
+      serverDistDir,
+      contentDir,
+      nodeExecutablePath: yield* HostProcess.ExecutablePath,
+      expectedNodeVersion: rootPackageJson.engines.node,
+      actualNodeVersion: process.versions.node,
+    });
+    signedExecutablePath = staged.signedExecutablePath;
+  } else {
+    yield* fs.copyFile(builtExecutable, signedExecutablePath);
+  }
   yield* fs.copyFile(path.join(repoRoot, "LICENSE"), path.join(contentDir, "LICENSE"));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
   yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
@@ -647,25 +678,26 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
 
   const executablePath = path.join(contentDir, executableName);
   if (input.platform === "linux") {
-    yield* bundleLinuxLibatomic({ repoRoot, contentDir, executablePath });
+    yield* bundleLinuxLibatomic({ repoRoot, contentDir, executablePath: signedExecutablePath });
   }
   // TEMPORARY one-time Node fix. Remove when fixed: https://github.com/nodejs/node/issues/67048
   if (input.platform === "linux" && input.arch === "arm64") {
-    const bytes = yield* fs.readFile(executablePath);
+    const bytes = yield* fs.readFile(signedExecutablePath);
     yield* Effect.try({
       try: () => assertLinuxArm64PageCompatibility(bytes),
-      catch: (cause) => new CliArchiveLinuxArm64PageError({ executablePath, cause }),
+      catch: (cause) =>
+        new CliArchiveLinuxArm64PageError({ executablePath: signedExecutablePath, cause }),
     });
   }
   if (input.platform === "mac") {
     yield* signMacArchiveContents({
       repoRoot,
       contentDir,
-      executablePath,
+      executablePath: signedExecutablePath,
       notarySubmissionFile: input.notarySubmissionFile,
     });
   } else if (input.platform === "win") {
-    yield* signWindowsExecutable(executablePath);
+    yield* signWindowsExecutable(signedExecutablePath);
   }
   if (input.platform !== "win") {
     yield* fs.chmod(executablePath, 0o755);
