@@ -69,10 +69,13 @@ const connectUnavailableCommand = Command.make("connect", {
   ),
 );
 
+const FORK_CLI_BRAND = "T3C Code (sunnoy/t3code fork)";
+const formatForkCliVersion = (version = packageJson.version) => `${FORK_CLI_BRAND} v${version}`;
+
 export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
   Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     Command.withDescription(
-      "Run T3 Code in this terminal and open it in your browser. To use it from your other devices, run `t3 up`.",
+      `${FORK_CLI_BRAND}: Run T3C Code in this terminal and open it in your browser. To use it from your other devices, run \`t3 up\`.`,
     ),
     Command.withHandler(runDefaultServerCommand),
     Command.withSubcommands([
@@ -126,8 +129,13 @@ export const cli = makeCli();
 export function runCli() {
   extendConnectionAttemptTimeout();
   keepOutboundFetchOnHttp1();
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs.length === 1 && rawArgs[0] === "--version") {
+    process.stdout.write(`${formatForkCliVersion()}\n`);
+    return;
+  }
   offerCliInstall({
-    args: process.argv.slice(2),
+    args: rawArgs,
     // A child started over IPC (a service launcher) has no one to answer.
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) && process.send === undefined,
     foreground: inTerminalForeground,
