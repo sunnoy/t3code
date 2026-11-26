@@ -91,6 +91,36 @@ const nextPublishedState = (emit: () => void) =>
   });
 
 describe("DesktopUpdates", () => {
+  it.effect("opens the fork release page without downloading or installing the update", () => {
+    const harness = makeHarness({
+      platform: "darwin",
+      appVersion: "0.1.12001",
+      appUpdateYml: "provider: github\nowner: sunnoy\nrepo: t3code\n",
+      env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+    });
+    return Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      const state = yield* nextPublishedState(() =>
+        harness.emit("update-available", {
+          version: "0.1.12002",
+        }),
+      );
+      assert.equal(state.manualDownload, true);
+      assert.equal(state.status, "available");
+      const download = yield* updates.download;
+      assert.equal(download.accepted, true);
+      assert.equal(download.completed, false);
+      assert.equal(download.state.status, "available");
+      assert.deepEqual(harness.openedDownloadPages, [
+        "https://github.com/sunnoy/t3code/releases/tag/v0.1.12002",
+      ]);
+      assert.equal((yield* updates.install).accepted, false);
+      assert.equal(harness.downloadCount(), 0);
+      assert.equal(harness.quitAndInstalls(), 0);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("updates Linux .deb installs and leaves other non-AppImage installs off", () =>
     Effect.gen(function* () {
       const linuxState = (packageType: string | undefined) =>

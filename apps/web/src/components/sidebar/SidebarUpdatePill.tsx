@@ -241,7 +241,8 @@ function SidebarUpdateControl() {
     state && action !== "none" ? getDesktopUpdateDownloadedVersion(state) : null;
   const everything = useUpdateEverything(localUpdateVersion);
   const checkProviderUpdates = useCheckProviderUpdates();
-  const runsEverything = everything.hasUpdates && !isDownloading;
+  const runsEverything =
+    everything.hasUpdates && !isDownloading && !(state?.manualDownload && action === "download");
   const run = useUpdateEverythingRun();
   const isRunningEverything = run !== null;
   const showCheckIcon = shouldShowDesktopUpdateCheckIcon({
