@@ -41,6 +41,8 @@ vi.mock("./connect.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./connect.ts")>();
   return {
     ...actual,
+    // The fork disables T3 Connect in ManagedPolicy; stub the gate so this test covers rollback.
+    requireConnectAllowed: Effect.void,
     linkEnvironmentForConnect: () =>
       Effect.sync(() => {
         events.push("link");
