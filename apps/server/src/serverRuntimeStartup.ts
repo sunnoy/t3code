@@ -26,6 +26,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
+import packageJson from "../package.json" with { type: "json" };
 import * as ServerConfig from "./config.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { flushCompileCache } from "./compileCache.ts";
@@ -322,9 +323,9 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
 
 /** Prints the one-time admin pairing URL to stdout only; logger records reach trace files and collectors. */
 export const announceStartupPairingUrl = (pairingUrl: string) =>
-  Effect.logInfo("Authentication required. Open T3 Code using the pairing URL.").pipe(
-    Effect.andThen(Console.log(`  pairingUrl: ${pairingUrl}`)),
-  );
+  Effect.logInfo(
+    `T3C Code (sunnoy/t3code fork) v${packageJson.version}: Authentication required. Open T3C Code using the pairing URL.`,
+  ).pipe(Effect.andThen(Console.log(`  pairingUrl: ${pairingUrl}`)));
 
 // Pairing tokens belong only in announceStartupPairingUrl's stdout output.
 export const logBrowserAutoOpenUnavailable = Effect.logInfo("browser auto-open unavailable", {

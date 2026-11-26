@@ -556,10 +556,11 @@ export const statusCommand = Command.make("status", {
       );
       if (flags.json) return yield* Console.log(setupJson(setup));
       const hints = yield* resolveHints(flags.baseDir);
+      const header = `T3C Code (sunnoy/t3code fork) v${packageJson.version}`;
       yield* Console.log(
         setup.service.otherBaseDir !== undefined
-          ? `This machine\n${formatSetup(setup, hints)}`
-          : `This machine\n${formatSetup(setup, hints)}\n\nChange access: \`${hints.up}\`.`,
+          ? `${header}\nThis machine\n${formatSetup(setup, hints)}`
+          : `${header}\nThis machine\n${formatSetup(setup, hints)}\n\nChange access: \`${hints.up}\`.`,
       );
     }),
   ),

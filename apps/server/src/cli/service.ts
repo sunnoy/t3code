@@ -367,7 +367,9 @@ const serviceStatusCommand = Command.make("status", projectLocationFlags).pipe(
             status.installedVersion ?? packageJson.version,
           ]),
         };
-        yield* Console.log(formatServiceStatus(status, packageJson.version, commands, protection));
+        yield* Console.log(
+          `T3C Code (sunnoy/t3code fork) v${packageJson.version}\n${formatServiceStatus(status, packageJson.version, commands, protection)}`,
+        );
       }),
     ),
   ),
