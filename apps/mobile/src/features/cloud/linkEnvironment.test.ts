@@ -23,6 +23,11 @@ import {
   updateLinkedEnvironmentLiveActivityPreference,
 } from "./linkEnvironment";
 
+vi.mock(import("@t3tools/shared/relayAuth"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  T3_CONNECT_ENABLED: true,
+}));
+
 vi.mock("expo-constants", () => ({
   default: {
     expoConfig: {

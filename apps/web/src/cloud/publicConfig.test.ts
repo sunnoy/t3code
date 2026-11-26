@@ -7,6 +7,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+vi.mock(import("@t3tools/shared/relayAuth"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  T3_CONNECT_ENABLED: true,
+}));
+
 describe("hasCloudPublicConfig", () => {
   it("rejects an insecure relay URL", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");

@@ -303,7 +303,6 @@ jobs:
       version: ${{ needs.resolve.outputs.version }}
       ref: ${{ github.sha }}
       release_channel: preview
-      relay_client_tracing: false
       clerk_publishable_key: ${{ needs.resolve.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ needs.resolve.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ needs.resolve.outputs.clerk_cli_oauth_client_id }}
@@ -314,7 +313,6 @@ jobs:
       target: dmg
       arch: arm64
       rust_target: aarch64-apple-darwin
-      resource_key: darwin-arm64
       cli_archive: false
       untrusted_bundle: true
 

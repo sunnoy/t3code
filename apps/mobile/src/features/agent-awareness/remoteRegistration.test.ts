@@ -53,6 +53,11 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { configureAndroidAgentNotifications } from "./androidNotifications";
 
+vi.mock(import("@t3tools/shared/relayAuth"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  T3_CONNECT_ENABLED: true,
+}));
+
 vi.mock("./androidNotifications", () => ({
   supportsAndroidAgentNotifications: vi.fn(() => true),
   configureAndroidAgentNotifications: vi.fn(),

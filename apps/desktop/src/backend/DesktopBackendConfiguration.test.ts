@@ -986,7 +986,7 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
-  it.effect("prefers the external packaged resource monitor over the copy inside the asar", () =>
+  it.effect("ignores resource monitor binaries left by an older desktop build", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -1011,7 +1011,7 @@ describe("DesktopBackendConfiguration", () => {
       yield* Effect.gen(function* () {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.resourceMonitorPath, monitorPath);
+        assert.notProperty(config.bootstrap, "resourceMonitorPath");
         assert.equal(config.bootstrap.desktopTelemetryFd, 4);
         assert.equal(config.bootstrap.desktopTelemetryControlFd, 5);
       }).pipe(
