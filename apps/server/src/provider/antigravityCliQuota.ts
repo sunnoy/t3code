@@ -172,8 +172,10 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
         HOME: home,
         TMPDIR: home,
         TERM: "dumb",
-        // agy keeps Google sign-ins in the OS keyring unless it believes it runs over SSH.
+        // agy keeps Google sign-ins in the OS keyring unless forced onto profile files:
+        // 1.5.12–1.5.15 check SSH_CONNECTION; 1.5.16+ checks AGY_CLI_FORCE_FILE_TOKEN_STORAGE.
         SSH_CONNECTION: "127.0.0.1 0 127.0.0.1 0",
+        AGY_CLI_FORCE_FILE_TOKEN_STORAGE: "1",
         AGY_CLI_DISABLE_AUTO_UPDATE: "true",
         BROWSER: "/bin/false",
       },
