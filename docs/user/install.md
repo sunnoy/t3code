@@ -12,7 +12,7 @@ Install the `t3` command to `~/.local/bin`:
 
 ```bash
 # macOS / Linux
-curl -fsSL https://t3.codes/install.sh | sh
+curl -fsSL https://github.com/sunnoy/t3code/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
