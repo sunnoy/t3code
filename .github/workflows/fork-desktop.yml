@@ -41,6 +41,8 @@ jobs:
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: vp run build:desktop:bundle
+      - name: Verify the bundled web title
+        run: grep -Eq '<title>T3C Code( \(Beta\))?</title>' apps/server/dist/client/index.html
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: js-bundle

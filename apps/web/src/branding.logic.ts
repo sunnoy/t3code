@@ -1,3 +1,5 @@
+export const WEB_APP_BASE_NAME = "T3C Code";
+
 const NIGHTLY_SERVER_VERSION_PATTERN = /^[^-+]+-(?:nightly|preview)\.\d{8}\.\d+$/;
 
 export function formatAppDisplayName(input: {
