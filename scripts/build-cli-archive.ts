@@ -430,10 +430,7 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
   const libraries = (yield* fs.readDirectory(input.contentDir, { recursive: true }))
     .filter(
       (entry) =>
-        entry.endsWith(".node") ||
-        entry.endsWith(".dylib") ||
-        entry.endsWith("spawn-helper") ||
-        entry.endsWith("t3-resource-monitor"),
+        entry.endsWith(".node") || entry.endsWith(".dylib") || entry.endsWith("spawn-helper"),
     )
     .map((entry) => path.join(input.contentDir, entry));
 
@@ -590,7 +587,6 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   readonly arch: BuildArch;
   readonly version: string;
   readonly outputDir: string;
-  readonly resourceMonitorDir: Option.Option<string>;
   readonly notarySubmissionFile: Option.Option<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -619,9 +615,6 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
       : targetExecutable;
   const serverDistDir = path.join(serverDir, "dist");
   const webClient = path.join(serverDistDir, "client");
-  const resourceMonitorDir = Option.getOrElse(input.resourceMonitorDir, () =>
-    path.join(serverDir, "dist/resource-monitor"),
-  );
 
   if (useBundledNode) {
     if (hostPlatform !== "darwin" || hostArch !== "x64") {
@@ -641,10 +634,6 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
     );
   }
   yield* requireInput(path.join(webClient, "index.html"), "Run `vp run --filter t3 build` first.");
-  yield* requireInput(
-    resourceMonitorDir,
-    "Build the resource monitor or pass --resource-monitor-dir.",
-  );
 
   const stem = cliArchiveStem(input.version, input.platform, input.arch);
   const stageRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-archive-" });
@@ -667,7 +656,6 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   }
   yield* fs.copyFile(path.join(repoRoot, "LICENSE"), path.join(contentDir, "LICENSE"));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
-  yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
   yield* stageRuntimeExternals({
     repoRoot,
     stageDir: contentDir,
@@ -752,12 +740,6 @@ const command = Command.make(
       Flag.withDescription("Release version for the archive name."),
     ),
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("release-cli")),
-    resourceMonitorDir: Flag.String("resource-monitor-dir").pipe(
-      Flag.withDescription(
-        "Directory laid out like dist/resource-monitor (defaults to apps/server/dist/resource-monitor).",
-      ),
-      Flag.optional,
-    ),
     notarySubmissionFile: Flag.String("notary-submission-file").pipe(
       Flag.withDescription(
         "macOS: submit for notarization without waiting and write the submission id here. Publish only after await-notarization succeeds.",

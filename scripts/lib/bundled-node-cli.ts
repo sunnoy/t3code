@@ -49,7 +49,7 @@ exec "$DIR/runtime/node" "$DIR/bin.mjs" "$@"
 /**
  * Stages a self-contained Node runtime + compiled server JS bundle for targets where Node SEA
  * cannot run (darwin-x64). Keeping the `.mjs` files at the archive root preserves
- * `import.meta.dirname` parity with SEA binaries so `client/`, `resource-monitor/`, workers,
+ * `import.meta.dirname` parity with SEA binaries so `client/`, workers,
  * and `node_modules/` resolve identically.
  */
 export const stageBundledNodeCli = Effect.fn("bundledNodeCli.stage")(function* (input: {

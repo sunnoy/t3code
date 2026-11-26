@@ -26,21 +26,18 @@ jobs:
             platform: linux
             arch: x64
             platform_key: linux-x64
-            rust_target: x86_64-unknown-linux-gnu
             sea: true
           - label: macOS Server arm64
             runner: macos-latest
             platform: mac
             arch: arm64
             platform_key: darwin-arm64
-            rust_target: aarch64-apple-darwin
             sea: true
           - label: macOS Server x64
             runner: macos-15-intel
             platform: mac
             arch: x64
             platform_key: darwin-x64
-            rust_target: x86_64-apple-darwin
             sea: false
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -57,10 +54,6 @@ jobs:
       - uses: ./.github/actions/setup-ci-deps
         with:
           install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          targets: ${{ matrix.rust_target }}
       - name: Install patchelf
         if: matrix.platform == 'linux'
         run: command -v patchelf || { sudo apt-get update && sudo apt-get install -y patchelf; }
@@ -72,16 +65,10 @@ jobs:
       - name: Build single-executable
         if: matrix.sea
         run: node apps/server/scripts/cli.ts build-exe --verbose
-      - name: Build the resource monitor
-        run: |
-          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ matrix.rust_target }}"
-          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.platform_key }}"
-          cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/t3-resource-monitor" \
-            "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.platform_key }}/"
       - name: Create the archive and smoke-test its server
         run: |
           node scripts/build-cli-archive.ts --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
-            --version "$APP_VERSION" --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release
+            --version "$APP_VERSION" --output-dir release
           archive="t3-$APP_VERSION-${{ matrix.platform_key }}.tar.gz"
           node scripts/smoke-cli-archive.ts --archive "release/$archive" --expect-version "$APP_VERSION"
           tar -xOf "release/$archive" "t3-$APP_VERSION-${{ matrix.platform_key }}/LICENSE" | cmp - LICENSE

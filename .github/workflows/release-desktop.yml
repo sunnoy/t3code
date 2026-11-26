@@ -481,7 +481,6 @@ jobs:
             --platform "${{ inputs.platform }}" \
             --arch "${{ inputs.arch }}" \
             --version "${{ inputs.version }}" \
-            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
             --output-dir release-cli \
             ${extra_args[@]+"${extra_args[@]}"}
 
