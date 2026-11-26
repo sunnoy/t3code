@@ -11,6 +11,7 @@
 #   T3CODE_HOME              T3 home directory (default: ~/.t3)
 #   T3CODE_INSTALL_BIN_DIR   where the `t3` command goes (default: ~/.local/bin)
 #   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   T3CODE_FORCE             set to 1 to redownload even if this version is already cached
 #
 # The archive is unpacked into $T3CODE_HOME/runtime/versions/<version>, the
 # same layout `t3 service install` uses, so the service reuses this download
@@ -223,7 +224,7 @@ archive="${stem}.tar.gz"
 versions_dir="${t3_home}/runtime/versions"
 target_dir="${versions_dir}/${version}"
 
-if [ -f "${target_dir}/.install-complete" ] && [ "$(cat "${target_dir}/.install-complete")" = "$version" ]; then
+if [ "${T3CODE_FORCE:-0}" != "1" ] && [ -f "${target_dir}/.install-complete" ] && [ "$(cat "${target_dir}/.install-complete")" = "$version" ]; then
   step "Version ${version} is already downloaded."
 else
   mkdir -p "$versions_dir"

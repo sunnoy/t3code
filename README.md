@@ -38,7 +38,24 @@ Download from [T3C Code Releases](https://github.com/sunnoy/t3code/releases):
 curl -fsSL https://raw.githubusercontent.com/sunnoy/t3code/fork/v0.1.12/scripts/install.sh | sh
 ```
 
-The script verifies `SHA256SUMS`, unpacks into `~/.t3/runtime/versions/<version>/`, and installs the `t3` command into `~/.local/bin/t3`.
+The script verifies `SHA256SUMS`, unpacks into `~/.t3/runtime/versions/<version>/`, and updates `~/.local/bin/t3` to point to the installed version.
+
+#### Re-running the install script & switching versions
+
+- **Verify you are running the fork**: `t3 --version`, `t3 status`, and `t3 service status` print `T3C Code (sunnoy/t3code fork) v<version>`.
+- **Normal upgrade (e.g. `0.1.12` -> `0.1.13`)**: click **Update everything** in the official Mac app (release tags match upstream `vX.Y.Z`) or run `t3 update` in a terminal. If you re-run `install.sh` instead, it switches `~/.local/bin/t3` to the new version, and you should run `t3 service install` to switch the running background service to it.
+- **Switching from a higher version number (e.g. legacy `0.1.12002` -> `0.1.12`)**: re-run `install.sh` to switch the CLI, then switch the background service with:
+
+```sh
+~/.local/bin/t3 service install --allow-downgrade
+```
+
+- **Re-downloading a republished archive with the same version tag (e.g. refreshed `v0.1.12`)**: `install.sh` skips downloading when `~/.t3/runtime/versions/<version>` is already cached. Pass `T3CODE_FORCE=1` to force a fresh download, then restart the service:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sunnoy/t3code/fork/v0.1.12/scripts/install.sh | T3CODE_FORCE=1 sh
+~/.local/bin/t3 service restart
+```
 
 ### Option 2: Manual archive download
 
