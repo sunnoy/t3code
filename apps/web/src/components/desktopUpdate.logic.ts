@@ -114,6 +114,13 @@ export function getDesktopUpdateButtonTooltip(
   state: DesktopUpdateState,
   resolve: MessageResolver = m,
 ): string {
+  if (state.manualDownload && state.status === "available" && state.availableVersion !== null) {
+    return resolve(
+      msg("Update {version} available. Open the download page.", {
+        version: state.availableVersion,
+      }),
+    );
+  }
   if (
     state.notAppliedVersion !== undefined &&
     (state.status === "available" || state.status === "downloaded") &&

@@ -52,7 +52,7 @@ const unrelatedLsof = ProcessRunner.ProcessRunner.of({
 
 afterEach(() => vi.restoreAllMocks());
 
-it.effect("authenticates each release page until the requested channel is found", () =>
+it.effect("checks public fork releases without reading GitHub credentials", () =>
   Effect.gen(function* () {
     const pages: string[] = [];
     const httpClient = HttpClient.make((request) => {
@@ -60,7 +60,7 @@ it.effect("authenticates each release page until the requested channel is found"
       assert.equal(url.origin, "https://api.github.com");
       assert.equal(url.pathname, "/repos/sunnoy/t3code/releases");
       assert.equal(request.headers.accept, "application/vnd.github+json");
-      assert.equal(request.headers.authorization, "Bearer gh-token");
+      assert.isUndefined(request.headers.authorization);
       const page = url.searchParams.get("page") ?? "";
       pages.push(page);
       const tag_name = page === "1" ? "v1.2.4-preview.20260101.1" : "v1.2.3";
