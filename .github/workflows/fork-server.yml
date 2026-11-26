@@ -140,6 +140,16 @@ jobs:
 
           `SHA256SUMS` verifies all archives. T3C Code Server uses this repository for CLI updates.
           NOTES
-          gh release create "v$RELEASE_VERSION" "${archives[@]}" SHA256SUMS --draft --target "$GITHUB_SHA" \
-            --title "T3C Code Server $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/t3c-release-notes.md"
-          gh release edit "v$RELEASE_VERSION" --draft=false --latest
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/v$RELEASE_VERSION" \
+              -f sha="$GITHUB_SHA" -F force=true
+            gh release upload "v$RELEASE_VERSION" "${archives[@]}" SHA256SUMS --clobber
+            gh release edit "v$RELEASE_VERSION" \
+              --title "T3C Code Server $RELEASE_VERSION" \
+              --notes-file "$RUNNER_TEMP/t3c-release-notes.md" \
+              --draft=false --latest
+          else
+            gh release create "v$RELEASE_VERSION" "${archives[@]}" SHA256SUMS --draft --target "$GITHUB_SHA" \
+              --title "T3C Code Server $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/t3c-release-notes.md"
+            gh release edit "v$RELEASE_VERSION" --draft=false --latest
+          fi
