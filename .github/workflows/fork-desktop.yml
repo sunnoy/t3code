@@ -8,9 +8,6 @@ on:
         required: true
         type: string
 
-concurrency:
-  group: t3c-release-${{ inputs.version }}
-
 permissions:
   contents: read
 
@@ -99,7 +96,14 @@ jobs:
     needs: bundle
     runs-on: macos-15-intel
     timeout-minutes: 60
+    env:
+      # The Intel image defaults to Xcode 16. Apple Speech needs the macOS 26 SDK.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
+      - name: Verify the Apple Speech SDK
+        run: |
+          xcodebuild -version
+          [[ "$(xcrun --sdk macosx --show-sdk-version)" == 26.* ]]
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: ./.github/actions/setup-ci-deps
         with:
@@ -172,6 +176,8 @@ jobs:
 
   publish:
     name: Publish the three x64 builds
+    concurrency:
+      group: t3c-release-${{ inputs.version }}
     needs: [bundle, linux-cli, mac, win]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
