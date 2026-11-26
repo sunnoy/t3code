@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+export const T3_CONNECT_ENABLED: boolean = false;
+
 const ClerkPublishableKeyPrefix = Schema.Literals(["pk_test", "pk_live", "unknown"]);
 
 export class ClerkPublishableKeyDecodeError extends Schema.TaggedError<ClerkPublishableKeyDecodeError>()(
