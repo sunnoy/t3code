@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
+import { T3_CONNECT_ENABLED } from "@t3tools/shared/relayAuth";
 
 export interface T3CodePublicConfig {
   readonly clerkPublishableKey: string | undefined;
@@ -20,6 +21,7 @@ export interface T3CodePublicConfig {
 type Environment = Readonly<Record<string, string | undefined>>;
 
 const REPO_ROOT = NodePath.resolve(NodeURL.fileURLToPath(import.meta.url), "../../..");
+const CONNECT_PUBLIC_ENV = /^(?:(?:T3CODE|VITE|EXPO_PUBLIC)_CLERK_|(?:VITE_)?T3CODE_RELAY_URL$)/u;
 
 export function loadRepoEnv({
   baseEnv = process.env,
@@ -32,7 +34,7 @@ export function loadRepoEnv({
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
   const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
 
-  return {
+  const environment = {
     ...rootEnv,
     ...localEnv,
     ...baseEnv,
@@ -99,6 +101,11 @@ export function loadRepoEnv({
         }
       : {}),
   };
+  return T3_CONNECT_ENABLED
+    ? environment
+    : Object.fromEntries(
+        Object.entries(environment).filter(([name]) => !CONNECT_PUBLIC_ENV.test(name)),
+      );
 }
 
 function resolvePublicConfig(...sources: readonly Environment[]): T3CodePublicConfig {

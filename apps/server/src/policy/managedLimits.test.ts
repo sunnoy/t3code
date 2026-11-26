@@ -127,6 +127,9 @@ it.effect("tells clients Connect is off when the policy leaves out remote client
     });
     assert.isTrue(ManagedLimits.allowsConnect(policy({ clients: ["remote"] })));
     assert.isFalse(ManagedLimits.allowsConnect(policy({ connect: false })));
+    const fork = { ...policy({ clients: ["remote"], connect: true }), connectDisabled: true };
+    assert.isTrue(ManagedLimits.allowsRemoteClients(fork));
+    assert.isFalse(ManagedLimits.allowsConnect(fork));
   }),
 );
 

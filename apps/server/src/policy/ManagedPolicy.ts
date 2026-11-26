@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { T3_CONNECT_ENABLED } from "@t3tools/shared/relayAuth";
 import {
   ManagedPolicyFileError,
   managedPolicyPath,
@@ -36,6 +37,7 @@ export class ManagedPolicy extends Context.Service<
     /** Where the policy is read from, whether or not a file exists there. */
     readonly path: string;
     readonly document: ManagedPolicyDocument | undefined;
+    readonly connectDisabled?: boolean;
     readonly settings: ManagedSettings.ManagedSettings;
     readonly providers: ManagedProviders.ManagedProviders;
     /** What clients are told; absent when no policy applies. */
@@ -206,7 +208,7 @@ const make = Effect.gen(function* () {
       lockedSettings: policy.summary.lockedSettings,
     });
   }
-  return policy;
+  return { ...policy, connectDisabled: !T3_CONNECT_ENABLED };
 });
 
 // A single-executable server resolves packages on disk only through `require`.
