@@ -306,7 +306,8 @@ describe("ssh tunnel scripts", () => {
   });
 
   it.each([
-    { host: "Darwin x86_64", system: "Darwin", machine: "x86_64", downloads: false },
+    { host: "FreeBSD amd64", system: "FreeBSD", machine: "amd64", downloads: false },
+    { host: "Darwin x86_64", system: "Darwin", machine: "x86_64", downloads: true },
     { host: "Darwin arm64", system: "Darwin", machine: "arm64", downloads: true },
   ])(
     "only downloads a release archive the host can run: $host",
@@ -363,7 +364,7 @@ describe("ssh tunnel scripts", () => {
         // A host the release archive cannot run on, so only reuse can succeed.
         NodeFS.writeFileSync(
           NodePath.join(bin, "uname"),
-          `#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; esac\n`,
+          `#!/bin/sh\ncase "$1" in -s) echo FreeBSD ;; -m) echo amd64 ;; esac\n`,
           { mode: 0o755 },
         );
         NodeFS.writeFileSync(
