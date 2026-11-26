@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import {
   NodeRuntimeUnavailableError,
@@ -573,17 +574,18 @@ export const AntigravityDriver: ProviderDriver<
       };
     });
 
+    const quotaPty = yield* Effect.serviceOption(PtyAdapter.PtyAdapter);
     const usage = probeAntigravityCliQuota({
       profileDirectory,
       authMethod: auth.authMethod,
       environment: processEnvironment,
+      pty: Option.getOrUndefined(quotaPty),
       executable: installation
         .acquire(settings.binaryPath, processEnvironment)
         .pipe(Effect.map((resolved) => resolved.executablePath)),
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,

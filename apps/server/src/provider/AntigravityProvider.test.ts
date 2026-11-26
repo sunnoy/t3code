@@ -842,6 +842,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           windows: [],
           unavailable: { reason: "probeFailed" },
         });
+        yield* TestClock.adjust("5 minutes");
         yield* harness.provider.snapshot.refresh;
         yield* Deferred.await(failedReadApplied);
         expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
@@ -855,6 +856,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         const unsupported = yield* harness.nextPublish(
           (snapshot) => snapshot.usageLimits?.unavailable?.reason === "unsupported",
         );
+        yield* TestClock.adjust("5 minutes");
         yield* harness.provider.snapshot.refresh;
         expect((yield* unsupported)?.usageLimits?.windows).toEqual([]);
       }),
@@ -931,6 +933,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       yield* Deferred.await(oldReadStarted);
       yield* Ref.set(usage, Effect.succeed(newLimits));
       yield* harness.provider.onSignedIn;
+      yield* TestClock.adjust("5 minutes");
       yield* harness.provider.onSessionStarted(started);
       expect((yield* published)?.usageLimits).toEqual(newLimits);
       // Switching again must not republish the previous account's limits, even if the read fails.
@@ -945,6 +948,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       );
       yield* harness.provider.onSignedIn;
       expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+      yield* TestClock.adjust("5 minutes");
       yield* harness.provider.onSessionStarted(started);
       expect((yield* republished)?.usageLimits).toEqual(failed);
     }),
