@@ -17,19 +17,15 @@ T3C Code runs the coding agents on your machine and gives them one interface. It
 
 - Account and quota requests go through the configured provider runtimes. Claude voucher lookup and redemption are removed.
 - Telemetry and T3 Connect are disabled. Pair with a server directly over your private network.
-- Desktop apps check this repository for updates and open the release page for manual installation.
+- The Linux Server CLI finds updates in the fork’s GitHub Releases.
 
 ## Install
 
-Download a build from [T3C Code Releases](https://github.com/sunnoy/t3code/releases).
+Download the Linux Server x64 tar.gz from [T3C Code Releases](https://github.com/sunnoy/t3code/releases). Extract it and run `./t3 serve --lan` from the extracted directory. The archive includes the web app and the MIT license.
 
-| Platform         | Package                                                         |
-| ---------------- | --------------------------------------------------------------- |
-| macOS Intel x64  | Download the DMG and drag T3C Code to Applications.             |
-| Windows x64      | Download and run the EXE installer.                             |
-| Linux Server x64 | Extract the tar.gz and run `./t3` from the extracted directory. |
+### Connect the official macOS app
 
-The desktop installers ship without Apple Developer ID or Microsoft Authenticode signatures.
+With the server running, run `./t3 pair` on the Linux host. Paste the LAN pairing URL into **Add environment** in the official Mac app, then select that remote environment. Provider operations in that environment run on the Linux host. See the upstream [LAN pairing guide](./docs/user/remote-access.md#pair-over-a-lan-or-private-network).
 
 ### Sign in to an agent
 
