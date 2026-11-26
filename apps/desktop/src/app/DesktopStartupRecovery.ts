@@ -31,7 +31,7 @@ const { logInfo, logWarning } = DesktopObservability.makeComponentLogger(
 
 export type StartupRecoveryOffer =
   | { readonly _tag: "Checking" }
-  | { readonly _tag: "Update"; readonly version: string }
+  | { readonly _tag: "Update"; readonly version: string; readonly manualDownload?: true }
   | { readonly _tag: "Downloading"; readonly version: string; readonly percent: number | null }
   | { readonly _tag: "Reinstall"; readonly version: string }
   | { readonly _tag: "Releases" }
@@ -57,7 +57,11 @@ export function resolveStartupRecoveryOffer(
     update.downloadedVersion ?? (update.status === "available" ? update.availableVersion : null);
   // A version that already failed to apply here would loop through install and relaunch.
   if (updateVersion !== null && updateVersion !== update.notAppliedVersion) {
-    return { _tag: "Update", version: updateVersion };
+    return {
+      _tag: "Update",
+      version: updateVersion,
+      ...(update.manualDownload ? { manualDownload: true } : {}),
+    };
   }
   // A newer release can know a key this one refuses; an older one or the releases page cannot help.
   if (managedPolicy) return { _tag: "ManagedPolicy" };
@@ -91,7 +95,9 @@ function describeOffer(offer: StartupRecoveryOffer): { text: string; action: str
         }),
         action: actionLink(
           "update",
-          m(msg("Update to {version}"), { version: offer.version }),
+          offer.manualDownload
+            ? m(msg("Open download page"))
+            : m(msg("Update to {version}"), { version: offer.version }),
           true,
         ),
       };
@@ -99,12 +105,12 @@ function describeOffer(offer: StartupRecoveryOffer): { text: string; action: str
       return {
         text:
           offer.percent === null
-            ? m(msg("Downloading {version}. T3 Code restarts when the download is done."), {
+            ? m(msg("Downloading {version}. T3C Code restarts when the download is done."), {
                 version: offer.version,
               })
             : m(
                 msg(
-                  "Downloading {version} ({percent}%). T3 Code restarts when the download is done.",
+                  "Downloading {version} ({percent}%). T3C Code restarts when the download is done.",
                 ),
                 { version: offer.version, percent: String(Math.floor(offer.percent / 10) * 10) },
               ),
@@ -133,7 +139,7 @@ function describeOffer(offer: StartupRecoveryOffer): { text: string; action: str
       return {
         text: m(
           msg(
-            "Your organization's managed policy stopped T3 Code from starting. Send the details below to your IT administrator.",
+            "Your organization's managed policy stopped T3C Code from starting. Send the details below to your IT administrator.",
           ),
         ),
         action: "",
@@ -149,7 +155,7 @@ function buildStartupRecoveryHtml(input: {
 }): string {
   const offer = describeOffer(input.offer);
   const output = input.failure.output.trim();
-  const title = escapeHtml(m(msg("T3 Code could not start")));
+  const title = escapeHtml(m(msg("T3C Code could not start")));
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${title}</title><style>
 :root{color-scheme:light dark;--bg:#fff;--fg:#111;--muted:#666;--line:#ddd;--code:#f4f4f4}
 @media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#fff;--muted:#999;--line:#333;--code:#111}}
@@ -166,7 +172,7 @@ pre{flex:1;min-height:60px;margin:0;overflow:auto;background:var(--code);border:
 <p>${escapeHtml(offer.text)}</p>
 <div class="actions">${offer.action}${actionLink("copy", m(msg("Copy details")))}${actionLink("quit", m(msg("Quit", { $context: "button, quits the app" })))}</div>
 <pre>${escapeHtml(output.length > 0 ? output : m(msg("The server wrote no output.")))}</pre>
-<p class="muted">${escapeHtml(m(msg("Version {version}. T3 Code tries again in the background. Logs: {logDir}"), { version: input.appVersion, logDir: input.logDir }))}</p>
+<p class="muted">${escapeHtml(m(msg("Version {version}. T3C Code tries again in the background. Logs: {logDir}"), { version: input.appVersion, logDir: input.logDir }))}</p>
 </body></html>`;
 }
 
@@ -267,7 +273,7 @@ export const listen: Effect.Effect<
         const failure = yield* Ref.get(failureRef);
         if (Option.isNone(failure)) return;
         yield* electronShell.copyText(
-          `T3 Code ${environment.appVersion} (${environment.platform} ${environment.processArch}) could not start.\n${failure.value.reason}\n\n${failure.value.output}`,
+          `T3C Code ${environment.appVersion} (${environment.platform} ${environment.processArch}) could not start.\n${failure.value.reason}\n\n${failure.value.output}`,
         );
         return;
       }
@@ -302,7 +308,7 @@ export const listen: Effect.Effect<
           minWidth: 420,
           minHeight: 320,
           show: false,
-          title: m(msg("T3 Code could not start")),
+          title: m(msg("T3C Code could not start")),
           autoHideMenuBar: true,
           backgroundColor: shouldUseDarkColors ? "#000000" : "#ffffff",
           webPreferences: {
