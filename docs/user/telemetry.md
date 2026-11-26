@@ -1,5 +1,7 @@
 # Product usage data and diagnostics
 
+T3C Code disables event collection and trace export. Local operational logs remain available. The telemetry settings below apply to upstream T3 Code builds.
+
 T3 Code sends lightweight product usage events and relay connection traces to keep the app reliable and fast. Prompts, responses, file contents, and credentials are never included (unless you explicitly approve an [agent feedback](#agent-feedback) card with conversation text attached).
 
 ## Product usage events
