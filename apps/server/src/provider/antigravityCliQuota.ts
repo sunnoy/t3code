@@ -18,9 +18,12 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FiberHandle from "effect/FiberHandle";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import type { AntigravityInstallationError } from "./AntigravityInstallation.ts";
@@ -28,6 +31,17 @@ import type { AntigravityInstallationError } from "./AntigravityInstallation.ts"
 const CLI_WINDOW = /^(Five Hour|Weekly) Limit Remaining$/i;
 const AUTH_REQUIRED =
   /\b(?:authentication required|sign in again|please (?:log|sign) in|invalid_grant|(?:access|refresh) token (?:has expired|is expired))\b/i;
+// An expired access token briefly renders the unauthenticated login prompt while agy refreshes
+// in the background; only treat it as signed-out if the interactive prompt never arrives.
+const LOGIN_PROMPT = /\b(?:not signed in|select login method)\b/i;
+const LOGIN_PROMPT_SETTLE = Duration.seconds(8);
+// agy sends a Secondary Device Attributes query (CSI > c) to detect Apple Terminal when
+// SSH_CONNECTION is set. On macOS, node-pty attaches a controlling /dev/tty whose blocking
+// read never times out unless the host replies, deadlocking startup until the probe times out.
+const DA2_QUERY = /\u001b\[>0?c/;
+const DA2_RESPONSE = "\u001b[>0;0;0c";
+const EXPECTED_WINDOW_COUNT = 4;
+const PARTIAL_PANEL_SETTLE = Duration.millis(200);
 const PERCENT = /^\[.*\]\s+(\d{1,3}(?:\.\d+)?)%$/;
 const GROUPS = {
   "gemini models": { id: "gemini", label: "Gemini Models" },
@@ -130,41 +144,94 @@ export function parseAntigravityCliQuota(screen: string, now: number): ServerPro
   return [...windows.values()];
 }
 
-export function readAntigravityQuotaTerminal(process: PtyProcess, now: () => number) {
-  return Effect.callback<ServerProviderUsageWindow[] | null>((resume) => {
-    let output = EMPTY_TERMINAL_OUTPUT;
-    let requested = false;
-    let removeExit = () => {};
-    const complete = (windows: ServerProviderUsageWindow[] | null) => {
-      removeData();
-      removeExit();
-      resume(Effect.succeed(windows));
-    };
-    const removeData = process.onData((chunk) => {
-      output = appendTerminalOutput(output, chunk, 16 * 1024);
-      const screen = NodeUtil.stripVTControlCharacters(output.text);
-      if (AUTH_REQUIRED.test(screen)) {
-        complete(null);
-      } else if (!requested && /^\? for shortcuts\b/m.test(screen)) {
-        requested = true;
-        try {
-          process.write("/usage\r");
-        } catch {
-          complete([]);
+export const readAntigravityQuotaTerminal = Effect.fn("readAntigravityQuotaTerminal")(function* (
+  process: PtyProcess,
+  now: () => number,
+) {
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const done = yield* Deferred.make<ServerProviderUsageWindow[] | null>();
+      const sawLoginPrompt = yield* Deferred.make<void>();
+      const partial = yield* Queue.unbounded<ServerProviderUsageWindow[]>();
+      let output = EMPTY_TERMINAL_OUTPUT;
+      let rawTail = "";
+      let repliedDa2 = false;
+      let requested = false;
+      let partialWindows: ServerProviderUsageWindow[] = [];
+      let finished = false;
+      let removeExit = () => {};
+      const complete = (windows: ServerProviderUsageWindow[] | null) => {
+        if (finished) return;
+        finished = true;
+        removeData();
+        removeExit();
+        Deferred.doneUnsafe(done, Exit.succeed(windows));
+      };
+      const removeData = process.onData((chunk) => {
+        rawTail = (rawTail + chunk).slice(-32);
+        if (!repliedDa2 && DA2_QUERY.test(rawTail)) {
+          repliedDa2 = true;
+          try {
+            process.write(DA2_RESPONSE);
+          } catch {
+            complete([]);
+            return;
+          }
         }
-      } else if (requested && /\besc Close\b/i.test(screen)) {
-        // AGY renders the close hint while the quota request is still loading.
-        const windows = parseAntigravityCliQuota(screen, now());
-        if (windows.length > 0) complete(windows);
-      }
-    });
-    removeExit = process.onExit(() => complete([]));
-    return Effect.sync(() => {
-      removeData();
-      removeExit();
-    });
-  });
-}
+        output = appendTerminalOutput(output, chunk, 16 * 1024);
+        const screen = NodeUtil.stripVTControlCharacters(output.text);
+        if (AUTH_REQUIRED.test(screen)) {
+          complete(null);
+        } else if (!requested && /^\? for shortcuts\b/m.test(screen)) {
+          requested = true;
+          try {
+            process.write("/usage\r");
+          } catch {
+            complete([]);
+          }
+        } else if (!requested && LOGIN_PROMPT.test(screen)) {
+          Deferred.doneUnsafe(sawLoginPrompt, Exit.void);
+        } else if (requested && /\besc Close\b/i.test(screen)) {
+          // AGY renders the close hint while the quota request is still loading, and later
+          // redraws top-to-bottom across multiple PTY chunks while the old close hint can still
+          // sit below. Complete immediately once all expected groups arrive; otherwise let the
+          // remaining chunks of the same frame land before accepting a smaller window set.
+          const windows = parseAntigravityCliQuota(screen, now());
+          if (windows.length >= EXPECTED_WINDOW_COUNT) {
+            complete(windows);
+          } else if (windows.length > 0) {
+            partialWindows = windows;
+            Queue.offerUnsafe(partial, windows);
+          }
+        }
+      });
+      removeExit = process.onExit(() => complete(partialWindows));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          finished = true;
+          removeData();
+          removeExit();
+        }),
+      );
+      const settlePartial = Effect.gen(function* () {
+        let latest = yield* Queue.take(partial);
+        while (true) {
+          const next = yield* Queue.take(partial).pipe(Effect.timeoutOption(PARTIAL_PANEL_SETTLE));
+          if (Option.isNone(next)) return latest;
+          latest = next.value;
+        }
+      });
+      const loginPromptTimeout = Deferred.await(sawLoginPrompt).pipe(
+        Effect.andThen(Effect.sleep(LOGIN_PROMPT_SETTLE)),
+        Effect.andThen(Effect.suspend(() => (requested ? Effect.never : Effect.succeed(null)))),
+      );
+      return yield* Effect.raceFirst(
+        Deferred.await(done),
+        Effect.raceFirst(settlePartial, loginPromptTimeout),
+      );
+    }),
+  );
+});
 
 type QuotaSandboxPlatform = "linux" | "darwin";
 
@@ -335,6 +402,9 @@ export const probeAntigravityCliQuota = Effect.fn("probeAntigravityCliQuota")(fu
   }).pipe(
     Effect.scoped,
     Effect.timeout("25 seconds"),
+    Effect.tapError((cause) =>
+      Effect.logWarning("Antigravity CLI quota probe failed.", { platform, cause }),
+    ),
     Effect.orElseSucceed(() =>
       makeUnavailableUsageLimits({
         checkedAt,

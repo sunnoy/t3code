@@ -139,6 +139,116 @@ describe("Antigravity CLI quota report", () => {
     }),
   );
 
+  effectIt.effect("replies to split DA2 terminal probes and waits for all quota groups", () =>
+    Effect.gen(function* () {
+      let receive: (data: string) => void = () => {};
+      const writes: string[] = [];
+      const terminal: PtyProcess = {
+        pid: 1,
+        write: (data) => {
+          writes.push(String(data));
+        },
+        resize: () => {},
+        kill: () => {},
+        onData: (listener) => {
+          receive = listener;
+          return () => {
+            receive = () => {};
+          };
+        },
+        onExit: () => () => {},
+      };
+      const result = yield* readAntigravityQuotaTerminal(terminal, () => now).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      // macOS agy blocks on /dev/tty after emitting CSI > c until the terminal answers DA2.
+      receive("\u001b[");
+      receive(">c");
+      expect(writes).toEqual(["\u001b[>0;0;0c"]);
+      receive("? for shortcuts\r\n");
+      expect(writes).toEqual(["\u001b[>0;0;0c", "/usage\r"]);
+      // Loading frame puts esc Close on screen before the loaded panel streams in two chunks.
+      receive("\u001b[2J\u001b[H└ Models & Quota\r\nLoading...\r\n  ↑/↓ Scroll · esc Close");
+      receive("\u001b[H" + report.slice(0, 9).join("\r\n"));
+      receive("\r\n" + report.slice(9).join("\r\n"));
+      expect(yield* Fiber.join(result)).toHaveLength(4);
+    }),
+  );
+
+  effectIt.effect("settles a smaller window set after 200ms when no other group arrives", () =>
+    Effect.gen(function* () {
+      let receive: (data: string) => void = () => {};
+      const terminal: PtyProcess = {
+        pid: 1,
+        write: () => {},
+        resize: () => {},
+        kill: () => {},
+        onData: (listener) => {
+          receive = listener;
+          return () => {
+            receive = () => {};
+          };
+        },
+        onExit: () => () => {},
+      };
+      const result = yield* readAntigravityQuotaTerminal(terminal, () => now).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      receive("? for shortcuts\r\n");
+      receive([...report.slice(0, 9), report.at(-1)!].join("\r\n"));
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Fiber.join(result)).toHaveLength(2);
+    }),
+  );
+
+  effectIt.effect(
+    "allows a transient login prompt during token refresh and fails when it persists",
+    () =>
+      Effect.gen(function* () {
+        let receive: (data: string) => void = () => {};
+        const writes: string[] = [];
+        const terminal: PtyProcess = {
+          pid: 1,
+          write: (data) => {
+            writes.push(String(data));
+          },
+          resize: () => {},
+          kill: () => {},
+          onData: (listener) => {
+            receive = listener;
+            return () => {
+              receive = () => {};
+            };
+          },
+          onExit: () => () => {},
+        };
+
+        // Transient login prompt while an expired access token refreshes in the background.
+        const refreshed = yield* readAntigravityQuotaTerminal(terminal, () => now).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        receive(
+          "Welcome to the Antigravity CLI. You are currently not signed in.\r\nSelect login method:\r\n",
+        );
+        yield* TestClock.adjust("1 second");
+        receive("\u001b[2J\u001b[H? for shortcuts\r\n");
+        expect(writes).toEqual(["/usage\r"]);
+        yield* TestClock.adjust("8 seconds");
+        receive("\u001b[2J\u001b[H" + report.join("\r\n"));
+        expect(yield* Fiber.join(refreshed)).toHaveLength(4);
+
+        // Persistent login prompt with no interactive prompt -> treat as auth required.
+        const signedOut = yield* readAntigravityQuotaTerminal(terminal, () => now).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        receive(
+          "Welcome to the Antigravity CLI. You are currently not signed in.\r\nSelect login method:\r\n",
+        );
+        yield* TestClock.adjust("8 seconds");
+        expect(yield* Fiber.join(signedOut)).toBeNull();
+      }),
+  );
+
   effectIt.effect.each([
     { screen: report.join("\r\n"), reason: undefined },
     { screen: "Authentication required: refresh token has expired", reason: "unsupported" },
