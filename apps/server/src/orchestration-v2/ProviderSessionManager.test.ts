@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   EnvironmentId,
   MessageId,
@@ -2105,7 +2106,7 @@ it.effect(
 );
 
 it.effect.each([
-  { resume: "native resume", supportsNativeResume: true, minutes: 2 },
+  { resume: "native resume", supportsNativeResume: true, minutes: 6 },
   { resume: "no native resume", supportsNativeResume: false, minutes: 30 },
 ])(
   "ProviderSessionManagerV2 releases an idle session with $resume after $minutes minutes",
@@ -2135,7 +2136,62 @@ it.effect.each([
         assert.isTrue(yield* manager.isLive(providerSessionId));
         yield* TestClock.adjust("1 second");
         assert.isFalse(yield* manager.isLive(providerSessionId));
-      }).pipe(Effect.provide(layerTest({ state, capabilities })));
+      }).pipe(
+        Effect.provide(
+          layerTest({ state, capabilities }).pipe(
+            Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect.each([
+  { label: "valid override", envValue: "900000", expectedMs: 900_000 },
+  {
+    label: "invalid override falls back to default",
+    envValue: "not-a-number",
+    expectedMs: 360_000,
+  },
+])(
+  "ProviderSessionManagerV2 honors T3CODE_SESSION_IDLE_TIMEOUT_MS: $label",
+  ({ envValue, expectedMs }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const capabilities = {
+        ...CodexCapabilities,
+        turns: { ...CodexCapabilities.turns, supportsNativeResume: true },
+      };
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("thread-env-idle-timeout");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+          ],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        yield* TestClock.adjust(expectedMs - 1_000);
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* manager.isLive(providerSessionId));
+      }).pipe(
+        Effect.provide(
+          layerTest({ state, capabilities }).pipe(
+            Layer.provide(
+              Layer.succeed(HostProcess.Environment, {
+                T3CODE_SESSION_IDLE_TIMEOUT_MS: envValue,
+              }),
+            ),
+          ),
+        ),
+      );
     }),
 );
 

@@ -1,4 +1,5 @@
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -78,9 +79,20 @@ import {
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
-const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+// Keep native-resume sessions warm past the 5-minute provider prompt-cache TTL by default,
+// and allow per-host tuning via T3CODE_SESSION_IDLE_TIMEOUT_MS (e.g. shorter on low-RAM
+// machines or longer for 1h prompt caches).
+const DEFAULT_IDLE_TIMEOUT_MS = 6 * 60 * 1000;
+const SESSION_IDLE_TIMEOUT_MS_ENV = "T3CODE_SESSION_IDLE_TIMEOUT_MS";
 // Without native resume, a released session comes back as a summary of the thread, so it stays longer.
 const NO_NATIVE_RESUME_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+function parseSessionIdleTimeoutMs(raw: string | undefined): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 /** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
@@ -578,10 +590,20 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
+      const hostEnvironment = yield* HostProcess.Environment;
+      const rawEnvIdleTimeoutMs = hostEnvironment[SESSION_IDLE_TIMEOUT_MS_ENV];
+      const envIdleTimeoutMs = parseSessionIdleTimeoutMs(rawEnvIdleTimeoutMs);
+      if (rawEnvIdleTimeoutMs?.trim() && envIdleTimeoutMs === undefined) {
+        yield* Effect.logWarning("orchestration-v2.driver-session.invalid-idle-timeout-env", {
+          envVar: SESSION_IDLE_TIMEOUT_MS_ENV,
+          value: rawEnvIdleTimeoutMs,
+        });
+      }
+      const configuredIdleTimeoutMs = options.idleTimeoutMs ?? envIdleTimeoutMs;
       const idleTimeoutFor = (runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime) =>
         Math.max(
           1,
-          options.idleTimeoutMs ??
+          configuredIdleTimeoutMs ??
             (runtime.providerSession.capabilities.turns.supportsNativeResume === true
               ? DEFAULT_IDLE_TIMEOUT_MS
               : NO_NATIVE_RESUME_IDLE_TIMEOUT_MS),
